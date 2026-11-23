@@ -522,7 +522,13 @@
 
   // ------------------------------------------------------------------ business rules
   function warrantyFor(p) {
-    const n = (p.name + " " + p.category).toLowerCase();
+    const n = (p.name + " " + p.category).toLowerCase(), brand = String(p.brand || "").toLowerCase(), nb = brand + " " + n;
+    // other brands first (an ARISTON dishwasher must not get the LG line)
+    if (nb.includes("ariston")) return "ARISTON";
+    if (/turbo\s?air/.test(nb)) return "TURBOAIR";
+    if (nb.includes("ufesa")) return "UFESA";
+    if (/\bde fan\b|dragon electronics/.test(nb) || (brand && brand !== "lg" && n.includes("fan"))) return "DE Fan";
+    if (brand && brand !== "lg") return null;
     if (n.includes("washtower")) return "LG WashTower";
     if (n.includes("dishwasher")) return "LG Dishwasher";
     if (n.includes("refrigerator") || n.includes("freezer")) return "LG Refrigerator";
@@ -539,7 +545,6 @@
     if (n.includes("commercial") && (n.includes("air") || n.includes("ac"))) return "LG Commercial AC";
     if (n.includes("air con") || n.includes("air condition") || /\bac\b/.test(n)) return "LG Room Air Con";
     if (n.includes("vacuum")) return /a9t/.test(n) ? "LG Vacuum Cleaner A9T series" : /a9k/.test(n) ? "LG Vacuum Cleaner A9K series" : "LG Vacuum Cleaner VC5420NHT";
-    if (n.includes("ariston")) return "ARISTON";
     return null;
   }
 
@@ -557,7 +562,8 @@
     return (words[0] || "XX").slice(0, 2).toUpperCase();
   }
 
-  const API = { buildQuote, checkTemplate, warrantyFor, initials, looksLikeCompany, unzip, zip };
+  const fmtDate = d => `${pad2(d.getDate())}-${MONTHS[d.getMonth()]}-${d.getFullYear()}`;
+  const API = { buildQuote, checkTemplate, warrantyFor, initials, looksLikeCompany, fmtDate, unzip, zip };
   if (typeof module !== "undefined" && module.exports) module.exports = API;
   else root.DQCore = API;
 })(typeof window !== "undefined" ? window : globalThis);
@@ -610,13 +616,27 @@
   #dq-panel td.n,#dq-panel th.n{text-align:right;white-space:nowrap}
   #dq-panel .dl{display:inline-block;margin-top:10px;padding:8px 12px;background:#1a7f37;color:#fff;border-radius:5px;text-decoration:none;font-weight:bold}
   #dq-panel .prow{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
-  #dq-panel .prow .pm{flex:1 1 150px;text-transform:uppercase}#dq-panel .prow .pq{flex:0 0 58px;padding:6px 4px;text-align:center}
+  #dq-panel .prow .pm{flex:1 1 150px;text-transform:uppercase}#dq-panel .prow .pm::placeholder{text-transform:none}#dq-panel .prow .pq{flex:0 0 58px;padding:6px 4px;text-align:center}
   #dq-panel .prow .pd{display:flex;align-items:center;gap:4px;margin:0;font-size:12px;color:#333;white-space:nowrap;cursor:pointer}
   #dq-panel .prow .pp{order:5;flex:1 1 100%;margin-left:0;border-color:#c8102e}
   #dq-panel .prow .px{background:none;border:0;color:#999;font-size:18px;cursor:pointer;padding:0 2px;line-height:1}
   #dq-panel .prow .px:hover{color:#c8102e}
   #dq-addrow{margin-top:8px;padding:5px 10px;border:1px dashed #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px}
-  #dq-panel details{margin-top:12px}#dq-panel summary{cursor:pointer;color:#c8102e}`;
+  #dq-panel details{margin-top:12px}#dq-panel summary{cursor:pointer;color:#c8102e}
+  #dq-panel .sg{order:4;flex:1 1 100%;border:1px solid #c8102e;border-radius:4px;background:#fff;max-height:280px;overflow:auto;display:none;box-shadow:0 4px 12px rgba(0,0,0,.12)}
+  #dq-panel .sgi{display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:12px}
+  #dq-panel .sgi:last-child{border-bottom:0}
+  #dq-panel .sgi.act,#dq-panel .sgi:hover{background:#fdecef}
+  #dq-panel .sgi img,#dq-panel .sgi .ph{width:34px;height:34px;object-fit:contain;flex:0 0 34px;background:#f6f6f6;border-radius:3px}
+  #dq-panel .sgi .tx{flex:1;min-width:0}#dq-panel .sgi .tx b{display:block;color:#222}
+  #dq-panel .sgi .tx span{display:block;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #dq-panel .sgi .pr{white-space:nowrap;color:#222;text-align:right}#dq-panel .sgi .pr i{display:block;color:#c8102e;font-style:normal}
+  #dq-panel .sgnone{padding:6px 8px;color:#888;font-size:12px}
+  #dq-cat{display:flex;align-items:center;gap:8px;margin:0 0 8px;padding:6px 8px;background:#f7f7f7;border-radius:4px;font-size:12px;color:#444}
+  #dq-cat .ct{flex:1}#dq-cat .ct.need{color:#c8102e}
+  #dq-catupd{padding:4px 10px;border:1px solid #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap}
+  #dq-catupd:disabled{color:#999;border-color:#bbb;cursor:wait}
+  #dq-catbar{height:4px;background:#eee;border-radius:2px;margin:-4px 0 8px;display:none}#dq-catbar div{height:100%;width:0;background:#c8102e;border-radius:2px;transition:width .2s}`;
   const st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);
 
   const today = new Date();
@@ -637,7 +657,9 @@
       <input type="text" id="dq-email" placeholder="name@example.com" style="display:none">
     </fieldset>
     <fieldset><legend>Products</legend>
-      <div class="hint">Model, quantity (empty = 1). Tick <b>Discount</b> to type your own price, incl. VAT.</div>
+      <div id="dq-cat"><div class="ct" id="dq-catstat"></div><button type="button" id="dq-catupd">Update product list</button></div>
+      <div id="dq-catbar"><div></div></div>
+      <div class="hint">Type part of a model or name (e.g. <b>X31</b> or <b>850L</b>) and pick from the list. Quantity empty = 1. Tick <b>Discount</b> to type your own price, incl. VAT.</div>
       <div id="dq-rows"></div>
       <button type="button" id="dq-addrow">+ Add product</button>
       <label>Price</label>
@@ -704,15 +726,55 @@
     const row = document.createElement("div"); row.className = "prow";
     row.innerHTML = `<input type="text" class="pm" placeholder="Model, e.g. GC-X31FFCRB"><input type="number" class="pq" min="1" placeholder="Qty">`
       + `<label class="pd"><input type="checkbox" class="pdc"> Discount</label><input type="text" class="pp" placeholder="Discounted price Rs (incl. VAT), e.g. 180000" style="display:none">`
-      + `<button type="button" class="px" title="Remove this product">\u00d7</button>`;
+      + `<button type="button" class="px" title="Remove this product">\u00d7</button><div class="sg"></div>`;
     const q = s => row.querySelector(s);
+    q(".pm").placeholder = "Model or name, e.g. X31 or 850L";
+    // suggestions from the saved product list
+    let sgItems = [], sgAct = -1;
+    const sgBox = q(".sg");
+    const sgHide = () => { sgBox.style.display = "none"; sgItems = []; sgAct = -1; };
+    const sgPick = i => {
+      const p = sgItems[i]; if (!p) return;
+      q(".pm").value = p.model; sgHide(); q(".pq").focus();
+    };
+    const sgShow = () => {
+      const val = q(".pm").value.trim();
+      if (val.length < 2 || !catalog.size) return sgHide();
+      sgItems = searchCatalog(val, 8); sgAct = sgItems.length ? 0 : -1;
+      if (!sgItems.length) { sgBox.innerHTML = `<div class="sgnone">No saved product matches "${h(val)}". Check the model, or update the product list.</div>`; sgBox.style.display = "block"; return; }
+      sgBox.innerHTML = sgItems.map((p, i) => `<div class="sgi${i === 0 ? " act" : ""}" data-i="${i}"><span class="ph" data-id="${h(p.id)}"></span>`
+        + `<div class="tx"><b>${h(p.model)}</b><span>${h(p.name)}</span></div>`
+        + `<div class="pr">${fmt(p.retail)}${p.promo ? `<i>Promo ${fmt(p.promo)}</i>` : ""}</div></div>`).join("");
+      sgBox.style.display = "block";
+      sgBox.querySelectorAll(".sgi").forEach(el => el.addEventListener("mousedown", e => { e.preventDefault(); sgPick(+el.dataset.i); }));
+      sgBox.querySelectorAll(".ph").forEach(async el => { const u = await thumbUrl(el.dataset.id); if (u && el.isConnected) { const im = document.createElement("img"); im.src = u; el.replaceWith(im); } });
+    };
+    const sgMove = d => {
+      if (!sgItems.length) return;
+      sgAct = (sgAct + d + sgItems.length) % sgItems.length;
+      sgBox.querySelectorAll(".sgi").forEach((el, i) => el.classList.toggle("act", i === sgAct));
+      sgBox.querySelectorAll(".sgi")[sgAct].scrollIntoView({ block: "nearest" });
+    };
+    q(".pm").addEventListener("input", sgShow);
+    q(".pm").addEventListener("focus", sgShow);
+    q(".pm").addEventListener("blur", () => setTimeout(sgHide, 150));
     q(".pm").value = model || ""; q(".pq").value = qty || "";
     q(".pdc").addEventListener("change", () => {
       q(".pp").style.display = q(".pdc").checked ? "block" : "none";
       if (q(".pdc").checked) { $("dq-disc").checked = true; q(".pp").focus(); }
     });
     q(".px").addEventListener("click", () => { row.remove(); if (!$("dq-rows").children.length) addRow(); });
-    q(".pm").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); const r = addRow(); r.querySelector(".pm").focus(); } });
+    q(".pm").addEventListener("keydown", e => {
+      const open = sgBox.style.display === "block" && sgItems.length;
+      if (e.key === "ArrowDown" && open) { e.preventDefault(); sgMove(1); }
+      else if (e.key === "ArrowUp" && open) { e.preventDefault(); sgMove(-1); }
+      else if (e.key === "Escape") sgHide();
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        if (open && sgAct >= 0) sgPick(sgAct);
+        else { sgHide(); const r = addRow(); r.querySelector(".pm").focus(); }
+      }
+    });
     q(".pm").addEventListener("paste", e => {        // pasting a list of models makes one line per model
       const txt = (e.clipboardData || window.clipboardData).getData("text");
       const lines = txt.split(/[\r\n;,]+/).map(x => x.trim()).filter(Boolean);
@@ -741,15 +803,219 @@
   const log = (msg, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = msg; $("dq-log").appendChild(d); d.scrollIntoView({ block: "nearest" }); return d; };
 
   // ------------------------------------------------------------------ product lookup
+  const norm = s => String(s || "").toUpperCase().replace(/[\s\-()]/g, "");
   let sitemap = null;
-  async function productUrl(model) {
-    if (!sitemap) {
-      try { const t = await (await fetch("/sitemap.xml", { cache: "no-store" })).text(); sitemap = [...t.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1]); }
-      catch (e) { sitemap = []; }
+  async function getSitemap(fresh) {
+    if (!sitemap || fresh) {
+      try { const t = await (await fetch("/sitemap.xml", { cache: "no-store" })).text(); sitemap = [...t.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m => m[1].trim()); }
+      catch (e) { sitemap = sitemap || []; }
     }
-    const m = model.toLowerCase();
-    const hit = sitemap.find(u => u.toLowerCase().endsWith("-" + m) || u.toLowerCase().endsWith("/" + m));
-    return hit || location.origin + "/" + model.replace(/-/g, "");
+    return sitemap;
+  }
+  async function productUrl(model) {
+    const sm = await getSitemap(), m = model.toLowerCase().replace(/\s+/g, ""), n = norm(model).toLowerCase();
+    const hit = sm.find(u => { const l = u.toLowerCase(); return l.endsWith("-" + m) || l.endsWith("/" + m) || l.endsWith("-" + n) || l.endsWith("/" + n); });
+    return hit || location.origin + "/" + model.replace(/[\s\-]/g, "");
+  }
+
+  // The product pages carry their data (Nuxt payload). Read it without opening the page.
+  function reviveNuxt(arr) {
+    const cache = new Map(), wrap = new Set(["Reactive", "ShallowReactive", "Ref", "ShallowRef", "EmptyRef", "EmptyShallowRef", "NuxtError", "Island"]);
+    const hy = i => {
+      if (typeof i !== "number") return i;
+      if (i < 0) return undefined;
+      if (cache.has(i)) return cache.get(i);
+      const v = arr[i];
+      if (v === null || typeof v !== "object") { cache.set(i, v); return v; }
+      if (Array.isArray(v)) {
+        if (typeof v[0] === "string" && (wrap.has(v[0]) || v[0] === "Date")) { const r = hy(v[1]); cache.set(i, r); return r; }
+        if (typeof v[0] === "string" && (v[0] === "Set" || v[0] === "Map")) { const r = v.slice(1).map(hy); cache.set(i, r); return r; }
+        const out = []; cache.set(i, out); v.forEach(x => out.push(hy(x))); return out;
+      }
+      const o = {}; cache.set(i, o); for (const k in v) o[k] = hy(v[k]); return o;
+    };
+    return hy(0);
+  }
+  const clean = s => String(s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  const frag = html => new DOMParser().parseFromString(html || "", "text/html").body;
+  const tableRows = html => [...frag(html).querySelectorAll("tr")].map(tr => [...tr.children].map(c => clean(c.textContent)).filter(Boolean)).filter(r => r.length);
+  function parseProductPage(html, url) {
+    const m = html.match(/<script[^>]*id="__NUXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!m) return null;
+    const data = reviveNuxt(JSON.parse(m[1]));
+    const ent = Object.entries((data && data.data) || {}).find(([k, v]) => k.startsWith("gql") && v && v.product && v.product.sku);
+    if (!ent) return null;
+    const p = ent[1].product, meta = {};
+    (p.metaData || []).forEach(x => { if (x && x.key) meta[x.key] = x.value; });
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    let crumbs = [];
+    doc.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+      try { const j = JSON.parse(s.textContent); (j["@graph"] || [j]).forEach(n => { if (n["@type"] === "BreadcrumbList") crumbs = (n.itemListElement || []).map(e => clean(e.name)); }); } catch (e) { /* ignore */ }
+    });
+    const cats = ((p.productCategories && p.productCategories.nodes) || []);
+    const topCat = (cats.find(c => !c.parent) || {}).name || (((cats[0] || {}).parent || {}).node || {}).name;
+    // features and * notes, in page order
+    const sd = frag(p.shortDescription); sd.querySelectorAll(".warranty, table").forEach(e => e.remove());
+    const features = [], notes = [];
+    sd.querySelectorAll("p, li").forEach(el => {
+      let t;
+      if (el.tagName === "LI") t = clean([...el.childNodes].filter(n => !(n.nodeType === 1 && /^(UL|OL)$/.test(n.tagName))).map(n => n.textContent).join(" "));
+      else t = clean(el.textContent);
+      if (!t) return;
+      (t.startsWith("*") ? notes : features).push(t);
+    });
+    // dimensions and weights (weight added to the matching dimension line)
+    const dims = [];
+    for (const r of tableRows(meta.dimension)) if (r.length >= 2) dims.push([r[0], r.slice(1).join(" ")]);
+    for (const r of tableRows(meta.weight_specs)) {
+      if (r.length < 2) continue;
+      const ex = dims.find(d => d[0] === r[0]);
+      if (ex) ex[1] += " | " + r.slice(1).join(" "); else dims.push([r[0], r.slice(1).join(" ")]);
+    }
+    let capacity = null;
+    for (const [k, v] of Object.entries(meta)) {
+      if (!/_specs$/.test(k) || k === "weight_specs" || !v) continue;
+      const rows = tableRows(v);
+      if (rows.length >= 2) { capacity = rows[0].map((x, i) => x + " " + (rows[1][i] || "")).join("  |  "); break; }
+    }
+    const retail = Number(p.rawRegularPrice || p.rawPrice) || null, sale = Number(p.rawSalePrice) || null;
+    let promoValid = null;
+    if (p.dateOnSaleTo) { const d = new Date(p.dateOnSaleTo); if (!isNaN(d)) promoValid = `${pad2(d.getDate())} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()]} ${d.getFullYear()}`; }
+    const model = clean(p.sku);
+    return {
+      id: norm(model), keys: [...new Set([norm(model), norm(meta.product_model)].filter(Boolean))],
+      model, name: clean(doc.title.replace(/\s*-\s*Dragon Electronics\s*$/, "")) || clean(p.name), url, brand: clean(meta.brand) || null,
+      category: crumbs.length >= 3 ? crumbs[1] : (topCat || "Products"),
+      retail, promo: sale && retail && sale < retail ? sale : null, promoValid,
+      noStock: meta._no_stock === "yes" || p.stockStatus === "OUT_OF_STOCK",
+      features, notes, dims, capacity,
+      image: (doc.querySelector('meta[property="og:image"]') || {}).content || null,
+      checked: new Date().toISOString()
+    };
+  }
+
+  // ------------------------------------------------------------------ saved product list (IndexedDB, this computer only)
+  const IDB = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => {
+      const r = indexedDB.open("dq-products", 1);
+      r.onupgradeneeded = () => { const db = r.result; db.createObjectStore("products", { keyPath: "id" }); db.createObjectStore("photos", { keyPath: "id" }); };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    }));
+    const run = async (store, mode, fn) => {
+      const db = await open();
+      return new Promise((res, rej) => { const t = db.transaction(store, mode), req = fn(t.objectStore(store)); t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); });
+    };
+    return {
+      get: (s, k) => run(s, "readonly", o => o.get(k)), put: (s, v) => run(s, "readwrite", o => o.put(v)),
+      all: s => run(s, "readonly", o => o.getAll()), keys: s => run(s, "readonly", o => o.getAllKeys())
+    };
+  })();
+  const catalog = new Map(), alias = new Map();
+  const remember = p => { catalog.set(p.id, p); (p.keys || [p.id]).forEach(k => alias.set(k, p.id)); };
+  const findSaved = model => { const id = alias.get(norm(model)); return id ? catalog.get(id) : null; };
+  const catInfo = () => store.get("catalog_info", null);
+  function catStatus() {
+    const info = catInfo(), n = [...catalog.values()].filter(p => !p.removed).length;
+    const el = $("dq-catstat");
+    if (!n) { el.className = "ct need"; el.textContent = "No product list yet. Load it once (about 2 minutes) to get model suggestions and faster quotes."; $("dq-catupd").textContent = "Load product list"; return; }
+    const d = info && info.date ? new Date(info.date) : null, old = d && (Date.now() - d) > 7 * 86400000;
+    el.className = "ct" + (old ? " need" : "");
+    el.textContent = `${n} products saved${d ? " \u00b7 updated " + DQCore.fmtDate(d) : ""}${old ? " \u00b7 update recommended" : ""}`;
+    $("dq-catupd").textContent = "Update product list";
+  }
+  (async () => { try { (await IDB.all("products")).forEach(remember); } catch (e) { /* no storage */ } catStatus(); })();
+  function searchCatalog(q, max) {
+    const toks = q.toLowerCase().split(/\s+/).filter(Boolean), qn = norm(q).toLowerCase();
+    const res = [];
+    for (const p of catalog.values()) {
+      if (p.removed) continue;
+      const mk = norm(p.model).toLowerCase(), hay = `${p.model} ${p.name} ${p.category}`.toLowerCase(), hayN = hay.replace(/[\s\-]/g, "");
+      let score = -1;
+      if (mk === qn) score = 0;
+      else if (mk.startsWith(qn)) score = 1;
+      else if (qn.length >= 2 && mk.includes(qn)) score = 2;
+      else if (toks.every(t => hay.includes(t) || hayN.includes(t.replace(/-/g, "")))) score = 3;
+      if (score >= 0) res.push([score, p]);
+    }
+    res.sort((x, y) => x[0] - y[0] || x[1].model.localeCompare(y[1].model));
+    return res.slice(0, max).map(r => r[1]);
+  }
+  const thumbs = new Map();
+  async function thumbUrl(id) {
+    if (thumbs.has(id)) return thumbs.get(id);
+    let u = null;
+    try { const ph = await IDB.get("photos", id); if (ph) u = URL.createObjectURL(new Blob([ph.bytes], { type: "image/jpeg" })); } catch (e) { /* none */ }
+    thumbs.set(id, u); return u;
+  }
+  async function savedPhoto(p) {
+    if (!p.image) return null;
+    try { const ph = await IDB.get("photos", p.id); if (ph && ph.src === p.image) return { bytes: ph.bytes, width: ph.width, height: ph.height }; } catch (e) { /* none */ }
+    const im = await photo(p.image);
+    try { await IDB.put("photos", { id: p.id, src: p.image, bytes: im.bytes, width: im.width, height: im.height }); thumbs.delete(p.id); } catch (e) { /* storage full */ }
+    return im;
+  }
+  async function pool(list, n, fn) { let i = 0; await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => { while (i < list.length) { const k = i++; await fn(list[k], k); } })); }
+  $("dq-catupd").addEventListener("click", async () => {
+    const btn = $("dq-catupd"), bar = $("dq-catbar"), fill = bar.firstElementChild, el = $("dq-catstat");
+    btn.disabled = true; bar.style.display = "block"; fill.style.width = "0";
+    const prog = (txt, f) => { el.className = "ct"; el.textContent = txt; fill.style.width = Math.round(f * 100) + "%"; };
+    try {
+      const urls = (await getSitemap(true)).filter(u => { const path = u.replace(/^https?:\/\/[^/]+\//, "").replace(/\/$/, ""); return path.split("/").length === 2 && !/^brand\//.test(path); });
+      if (!urls.length) throw new Error("the website's product list (sitemap) could not be read");
+      const before = new Map(catalog), seen = new Set(); let added = 0, changed = 0, done = 0, failed = 0;
+      await pool(urls, 4, async u => {
+        try {
+          const r = await fetch(u, { cache: "no-store" });
+          if (r.ok) {
+            const p = parseProductPage(await r.text(), r.url);
+            if (p && p.retail) {
+              const o = before.get(p.id);
+              if (!o || o.removed) added++; else if (o.retail !== p.retail || o.promo !== p.promo) changed++;
+              p.removed = false; seen.add(p.id); remember(p); await IDB.put("products", p);
+            }
+          }
+        } catch (e) { failed++; }
+        prog(`Reading products\u2026 ${++done} / ${urls.length}`, 0.6 * done / urls.length);
+      });
+      if (!seen.size) throw new Error("no product could be read \u2013 the website may have changed");
+      let removed = 0;
+      for (const p of catalog.values()) if (!seen.has(p.id) && !p.removed) { p.removed = true; removed++; await IDB.put("products", p); }
+      const have = new Map((await IDB.all("photos")).map(ph => [ph.id, ph.src]));
+      const need = [...catalog.values()].filter(p => !p.removed && p.image && have.get(p.id) !== p.image);
+      let pd = 0, pfail = 0;
+      await pool(need, 3, async p => {
+        try { await savedPhoto(p); } catch (e) { pfail++; }
+        prog(`Saving photos\u2026 ${++pd} / ${need.length}`, 0.6 + 0.4 * pd / need.length);
+      });
+      store.set("catalog_info", { date: new Date().toISOString(), count: seen.size });
+      catStatus();
+      const parts = [`${seen.size} products saved`];
+      if (before.size) parts.push(`${added} new`, `${changed} price change${changed === 1 ? "" : "s"}`, `${removed} removed from the website`);
+      log(`\u2713 Product list updated: ${parts.join(", ")}.${failed || pfail ? ` ${failed + pfail} item(s) could not be read; they are tried again at the next update.` : ""}`, "ok");
+    } catch (e) {
+      catStatus(); log("\u2717 Product list not updated: " + h(e.message || e), "err");
+    } finally { btn.disabled = false; bar.style.display = "none"; }
+  });
+
+  // Live lookup at quote time: always reads the current page (prices change); the saved list gives the
+  // page address, the photo, and a fallback when the product has been removed from the website.
+  async function readProduct(model) {
+    const saved = findSaved(model);
+    let url = saved ? saved.url : await productUrl(model);
+    let r = await fetch(url, { cache: "no-store" }).catch(() => null);
+    if ((!r || !r.ok) && saved) { const u2 = await productUrl(model); if (u2 !== url) { url = u2; r = await fetch(url, { cache: "no-store" }).catch(() => null); } }
+    if (!r || !r.ok) {
+      if (saved) return Object.assign({}, saved, { stale: true });
+      throw new Error("not on the website \u2013 it may have been removed, or check the model code");
+    }
+    let d = null;
+    try { d = parseProductPage(await r.text(), r.url); } catch (e) { d = null; }
+    if (!d) return readProductFrame(r.url, model);
+    if (!d.keys.includes(norm(model))) throw new Error(`the page found is for ${d.model}, not ${model}`);
+    if (!d.retail) throw new Error("price not found on the page");
+    d.removed = false; remember(d); IDB.put("products", d).catch(() => {});
+    return d;
   }
 
   function loadFrame(url) {
@@ -762,11 +1028,8 @@
     });
   }
 
-  async function readProduct(model) {
-    let url = await productUrl(model);
-    const probe = await fetch(url, { cache: "no-store" });
-    if (!probe.ok) throw new Error("not on the website \u2013 it may have been removed, or check the model code");
-    url = probe.url;
+  // backup method: open the page in a hidden frame and read what is shown on screen
+  async function readProductFrame(url, model) {
     const f = await loadFrame(url);
     try {
       const doc = f.contentDocument, W = ms => sleep(ms);
@@ -814,7 +1077,8 @@
         notes: kf.filter(s => s.startsWith("*")),
         image: doc.querySelector('meta[property="og:image"]')?.content || null
       };
-      if (pageModel.replace(/-/g, "").toUpperCase() !== model.replace(/-/g, "").toUpperCase()) throw new Error(`the page found is for ${pageModel}, not ${model}`);
+      data.id = norm(pageModel); data.keys = [data.id];
+      if (norm(pageModel) !== norm(model)) throw new Error(`the page found is for ${pageModel}, not ${model}`);
       if (!data.retail) throw new Error("price not found on the page");
       return data;
     } finally { f.remove(); }
@@ -876,7 +1140,7 @@
       const model = row.querySelector(".pm").value.trim().toUpperCase(), qtxt = row.querySelector(".pq").value.trim();
       const disc = row.querySelector(".pdc").checked, ptxt = row.querySelector(".pp").value.trim();
       if (!model) return null;
-      if (!/^[A-Z0-9.\-\/]+$/.test(model)) return { bad: `${model} (model code)` };
+      if (!/^[A-Z0-9.\-\/ ()]+$/.test(model)) return { bad: `${model} (model code)` };
       const qty = qtxt === "" ? 1 : Math.round(+qtxt);
       if (!(qty >= 1)) return { bad: `${model}: quantity "${qtxt}"` };
       const it = { model, qty };
@@ -903,9 +1167,10 @@
           const usePromo = own == null && $("dq-price").value === "promo" && d.promo;
           const price = own != null ? own : usePromo ? d.promo : d.retail;
           if (own != null && own >= d.retail) problems.push(`${d.model}: your price ${fmt(own)} is not below the website price ${fmt(d.retail)}`);
-          products.push({ category: d.category, model: d.model, name: d.name, qty: it.qty, price, normal: d.retail, url: d.url, features: d.features, capacity: d.capacity, dims: d.dims, notes: d.notes, _d: d, _promo: usePromo, _own: own != null });
-          try { if (d.image) images[d.model] = await photo(d.image); } catch (e) { problems.push(`${d.model}: photo could not be read`); }
-          line.className = "ok"; line.innerHTML = `\u2713 ${h(d.model)} \u2013 ${h(d.name)} \u2013 ${fmt(price)}${own != null ? ` <span class='warn'>(your price; website ${fmt(d.retail)})</span>` : ""}${d.noStock ? " <span class='warn'>(No Stock on website)</span>" : ""}`;
+          products.push({ category: d.category, brand: d.brand, model: d.model, name: d.name, qty: it.qty, price, normal: d.retail, url: d.url, features: d.features, capacity: d.capacity, dims: d.dims, notes: d.notes, _d: d, _promo: usePromo, _own: own != null });
+          try { const im = await savedPhoto(d); if (im) images[d.model] = im; } catch (e) { problems.push(`${d.model}: photo could not be read`); }
+          if (d.stale) problems.push(`${d.model}: not on the website any more \u2013 details and price taken from the saved product list (${DQCore.fmtDate(new Date(d.checked))}). Check them.`);
+          line.className = "ok"; line.innerHTML = `\u2713 ${h(d.model)} \u2013 ${h(d.name)} \u2013 ${fmt(price)}${own != null ? ` <span class='warn'>(your price; website ${fmt(d.retail)})</span>` : ""}${d.noStock ? " <span class='warn'>(No Stock on website)</span>" : ""}${d.stale ? " <span class='warn'>(saved copy \u2013 removed from website)</span>" : ""}`;
           if (!d.dims.length) problems.push(`${d.model}: no dimensions on the website`);
         } catch (e) {
           line.className = "err"; line.innerHTML = `\u2717 ${h(it.model)}: ${h(e.message)}`; problems.push(`${it.model}: ${e.message}`);
