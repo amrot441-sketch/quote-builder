@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quote Builder</title>
+<style>
+  :root { --red:#c8102e; --ink:#222; --muted:#666; --bg:#f6f6f6; --card:#fff; --line:#e3e3e3; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ink:#eee; --muted:#aaa; --bg:#181818; --card:#232323; --line:#3a3a3a; } }
+  :root[data-theme="dark"] { --ink:#eee; --muted:#aaa; --bg:#181818; --card:#232323; --line:#3a3a3a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.55 Arial, Helvetica, sans-serif; }
+  header { background:var(--red); color:#fff; padding:22px 16px; }
+  header h1 { margin:0 auto; max-width:760px; font-size:24px; }
+  header p { margin:4px auto 0; max-width:760px; opacity:.9; }
+  main { max-width:760px; margin:0 auto; padding:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:16px 0; }
+  h2 { margin:0 0 10px; font-size:19px; color:var(--red); }
+  ol { padding-left:22px; margin:8px 0; } li { margin:6px 0; }
+  .bm { display:inline-block; margin:10px 0 4px; padding:12px 20px; background:var(--red); color:#fff; font-weight:bold; border-radius:8px; text-decoration:none; cursor:grab; font-size:17px; }
+  .muted { color:var(--muted); font-size:14px; }
+  code { background:rgba(127,127,127,.15); padding:1px 5px; border-radius:4px; }
+  table { border-collapse:collapse; width:100%; font-size:15px; } td { border-top:1px solid var(--line); padding:7px 4px; vertical-align:top; }
+  td:first-child { font-weight:bold; width:38%; }
+</style>
+</head>
+<body>
+<header><h1>Quote Builder</h1><p>Dragon Electronics quotations from model numbers, in Yousouf's DP_ISL_100 format.</p></header>
+<main>
+  <div class="card">
+    <h2>1 · Add the button to Chrome (once)</h2>
+    <ol>
+      <li>Show the bookmarks bar: press <code>Ctrl</code> + <code>Shift</code> + <code>B</code>.</li>
+      <li>Drag this red button onto the bookmarks bar:<br><a class="bm" id="bm" href="#">Quote Builder</a><br>
+        <span class="muted">Dragging does not open it. If dragging does not work: right-click the bookmarks bar → Add page…, name it <b>Quote Builder</b> and paste the text below as the URL.</span></li>
+    </ol>
+    <textarea id="bmtext" readonly rows="3" style="width:100%;font:12px monospace;margin-top:6px"></textarea>
+  </div>
+  <div class="card">
+    <h2>2 · First use: load your template (once)</h2>
+    <ol>
+      <li>Open <a href="https://www.dragonelectronics.mu/" target="_blank" rel="noopener">www.dragonelectronics.mu</a>.</li>
+      <li>Click <b>Quote Builder</b> on the bookmarks bar. A panel opens on the right.</li>
+      <li>At the bottom of the panel, under <b>Quotation template</b>, choose <code>template.xlsx</code> from your computer.</li>
+    </ol>
+    <p class="muted">The template, with the letterhead and signature, stays inside Chrome on your computer. It is never put on this website.</p>
+  </div>
+  <div class="card">
+    <h2>3 · Make a quotation</h2>
+    <ol>
+      <li>On any dragonelectronics.mu page, click <b>Quote Builder</b>.</li>
+      <li>Fill in the customer, the models (one per line, e.g. <code>GC-X31FFCRB x2</code>) and the terms.</li>
+      <li>Click <b>Generate quotation</b>. The Excel file downloads by itself.</li>
+      <li>For a PDF: open the file in Excel → File → Save As → PDF.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h2>Good to know</h2>
+    <table>
+      <tr><td>Quote numbers</td><td>DP | customer initials | running number. The last number used is remembered in Chrome and can be corrected in the panel.</td></tr>
+      <tr><td>Prices</td><td>Normal retail price incl. VAT, or the promo price when you choose it. Promo prices are always listed after generating.</td></tr>
+      <tr><td>Model not found</td><td>The panel says so and builds the quote with the others. Usually the product was removed from the website, or the code has a typo.</td></tr>
+      <tr><td>Other computer</td><td>Add the button and load the template on that computer too. The quote counter and history are separate per computer.</td></tr>
+      <tr><td>If it stops working</td><td>The website layout probably changed. Products will show ✗ with a reason; the code then needs a small update.</td></tr>
+    </table>
+  </div>
+</main>
+<script>
+  var base = location.href.replace(/[#?].*$/, "").replace(/[^\/]*$/, "");
+  var code = "javascript:(function(){if(!/dragonelectronics\\.mu$/.test(location.hostname)){alert('Open www.dragonelectronics.mu first, then click Quote Builder again.');return;}var s=document.createElement('script');s.src='" + base + "quote-builder.js?v='+Date.now();document.body.appendChild(s);})();";
+  document.getElementById("bm").href = code;
+  document.getElementById("bm").addEventListener("click", function (e) { e.preventDefault(); alert("Drag this button to your bookmarks bar instead of clicking it."); });
+  document.getElementById("bmtext").value = code;
+</script>
+</body>
+</html>
