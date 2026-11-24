@@ -769,7 +769,8 @@
         <input type="file" id="dq-posfile" accept=".txt,.TXT,text/plain" style="display:none"></div>
       <div class="hint">Type part of a model or name (e.g. <b>X31</b> or <b>850L</b>) and pick from the list. Quantity empty = 1. Tick <b>Discount</b> to type your own price, incl. VAT.</div>
       <div id="dq-rows"></div>
-      <button type="button" id="dq-addrow">+ Add product</button>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:8px"><button type="button" id="dq-addrow" style="margin-top:0">+ Add product</button>
+        <span id="dq-pcount" style="font-size:12px;color:#555"></span></div>
       <label>Price</label>
       <select id="dq-price"><option value="retail">Normal retail price</option><option value="promo">Promo price where available</option></select>
       <div class="chk"><input type="checkbox" id="dq-disc"> Show Normal + Discounted price columns</div>
@@ -814,7 +815,7 @@
     <button id="dq-go">Generate quotation</button>
     <div id="dq-log"></div>
     <details><summary>Quote history on this computer</summary><div id="dq-hist"></div></details>
-    <div id="dq-ver" style="margin-top:14px;padding-top:8px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#999">Quote Builder version 1.0 \u00b7 24-Nov-2026</div>
+    <div id="dq-ver" style="margin-top:14px;padding-top:8px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#999">Quote Builder version 1.1 \u00b7 24-Nov-2026</div>
   </div>`;
   document.body.appendChild(panel);
   const $ = id => panel.querySelector("#" + id);
@@ -838,6 +839,12 @@
 
   $("dq-price").addEventListener("change", () => { if ($("dq-price").value === "promo") $("dq-disc").checked = true; });
   // product lines: model | qty | [ ] Discount -> price
+  // how many products (and units) are in the quote so far
+  function updCount() {
+    const rows = [...$("dq-rows").querySelectorAll(".prow")].filter(r => r.querySelector(".pm").value.trim());
+    const units = rows.reduce((s, r) => s + (Math.max(1, Math.round(+r.querySelector(".pq").value) || 1)), 0);
+    $("dq-pcount").innerHTML = rows.length ? `<b>${rows.length}</b> product${rows.length === 1 ? "" : "s"} in this quote${units !== rows.length ? ` \u00b7 ${units} units` : ""}` : "No product yet";
+  }
   function addRow(model, qty) {
     const row = document.createElement("div"); row.className = "prow";
     row.innerHTML = `<input type="text" class="pm" placeholder="Model, e.g. GC-X31FFCRB"><input type="number" class="pq" min="1" placeholder="Qty">`
@@ -851,7 +858,7 @@
     const sgHide = () => { sgBox.style.display = "none"; sgItems = []; sgAct = -1; };
     const sgPick = i => {
       const p = sgItems[i]; if (!p) return;
-      q(".pm").value = p.model; sgHide(); q(".pq").focus();
+      q(".pm").value = p.model; sgHide(); q(".pq").focus(); updCount();
     };
     const sgShow = () => {
       const val = q(".pm").value.trim();
@@ -879,7 +886,7 @@
       q(".pp").style.display = q(".pdc").checked ? "block" : "none";
       if (q(".pdc").checked) { $("dq-disc").checked = true; q(".pp").focus(); }
     });
-    q(".px").addEventListener("click", () => { row.remove(); if (!$("dq-rows").children.length) addRow(); });
+    q(".px").addEventListener("click", () => { row.remove(); if (!$("dq-rows").children.length) addRow(); updCount(); });
     q(".pm").addEventListener("keydown", e => {
       const open = sgBox.style.display === "block" && sgItems.length;
       if (e.key === "ArrowDown" && open) { e.preventDefault(); sgMove(1); }
@@ -902,9 +909,11 @@
       });
     });
     $("dq-rows").appendChild(row);
+    if ($("dq-pcount")) updCount();
     return row;
   }
   addRow(); addRow(); addRow();
+  $("dq-rows").addEventListener("input", updCount); updCount();
   $("dq-addrow").addEventListener("click", () => addRow().querySelector(".pm").focus());
   // ---- people who sign the quote (list kept in Chrome on this computer)
   const DEFAULT_SIGNERS = [["Youvraj AUBEELUCK", "Shop Manager"], ["Farhaan ELLAHEE", "Sales Demonstrator"], ["Emillio MARUTHAMUTEE", "Sales Demonstrator"],
