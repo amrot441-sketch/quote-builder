@@ -129,6 +129,44 @@
     if (bad.length) throw new Error("This template's layout is different from 'Quotation Template 2026 05 13' (" + bad.slice(0, 2).join("; ") + ").");
     const get = n => dec.decode(files.get(n));
     const put = (n, s) => files.set(n, enc.encode(s));
+    // extra cell styles derived from the template's own ones (alignment / number format / font)
+    let stylesXml = get("xl/styles.xml");
+    const xfList = () => [...stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/)[1].matchAll(/<xf [^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g)].map(m => m[0]);
+    const derived = new Map();
+    const deriveStyle = (base, o) => {
+      const key = base + JSON.stringify(o);
+      if (derived.has(key)) return derived.get(key);
+      const list = xfList(); let x = list[base];
+      if (!x) return base;
+      if (o.fontId != null) x = x.replace(/fontId="\d+"/, `fontId="${o.fontId}"`);
+      if (o.fillId != null) x = x.replace(/fillId="\d+"/, `fillId="${o.fillId}"`).replace(/^<xf (?![^>]*applyFill)/, '<xf applyFill="1" ');
+      if (o.numFmtId != null) x = x.replace(/numFmtId="\d+"/, `numFmtId="${o.numFmtId}"`).replace(/^<xf (?![^>]*applyNumberFormat)/, '<xf applyNumberFormat="1" ');
+      if (o.horizontal) {
+        if (/<alignment /.test(x)) x = x.replace(/<alignment ([^>]*?)\/>/, (m, at) => `<alignment horizontal="${o.horizontal}" ${at.replace(/horizontal="[^"]*"\s*/, "")}/>`);
+        else x = x.replace(/\/>$/, `><alignment horizontal="${o.horizontal}"/></xf>`);
+      }
+      const idx = list.length;
+      stylesXml = stylesXml.replace(/<\/cellXfs>/, x + "</cellXfs>").replace(/<cellXfs count="\d+"/, `<cellXfs count="${idx + 1}"`);
+      derived.set(key, idx); return idx;
+    };
+    const solidFill = rgb => {
+      const fills = [...stylesXml.match(/<fills[^>]*>([\s\S]*?)<\/fills>/)[1].matchAll(/<fill>[\s\S]*?<\/fill>|<fill\/>/g)].map(m => m[0]);
+      const ex = fills.findIndex(f => /patternType="solid"/.test(f) && f.includes(`rgb="${rgb}"`));
+      if (ex >= 0) return ex;
+      stylesXml = stylesXml.replace(/<\/fills>/, `<fill><patternFill patternType="solid"><fgColor rgb="${rgb}"/><bgColor indexed="64"/></patternFill></fill></fills>`).replace(/<fills count="\d+"/, `<fills count="${fills.length + 1}"`);
+      return fills.length;
+    };
+    const fontIdOf = base => +((xfList()[base] || "").match(/fontId="(\d+)"/) || [0, 0])[1];
+    // a bold version of a style's font (re-uses an identical font when the template has one)
+    const boldFont = base => {
+      const fid = fontIdOf(base);
+      const fonts = [...stylesXml.match(/<fonts[^>]*>([\s\S]*?)<\/fonts>/)[1].matchAll(/<font>[\s\S]*?<\/font>|<font\/>/g)].map(m => m[0]);
+      const f = fonts[fid] || ""; if (/<b\/>/.test(f)) return fid;
+      const fb = f.replace("<font>", "<font><b/>"), ex = fonts.indexOf(fb);
+      if (ex >= 0) return ex;
+      stylesXml = stylesXml.replace(/<\/fonts>/, fb + "</fonts>").replace(/<fonts count="\d+"/, `<fonts count="${fonts.length + 1}"`);
+      return fonts.length;
+    };
     const sheets = sheetPaths(files), base = sheets["NO Disc"], disc = sheets["With Disc Column"];
     const SHEET = base.path, SHEET_RELS = SHEET.replace(/worksheets\/(sheet\d+\.xml)$/, "worksheets/_rels/$1.rels");
     let s = get(SHEET), sst = get("xl/sharedStrings.xml");
@@ -303,6 +341,23 @@
     };
     const styleAt = (xml, r, ref, dflt) => { const m = rowOf(xml, r).match(new RegExp(`<c r="${ref}"[^>]*\\ss="(\\d+)"`)); return m ? +m[1] : dflt; };
     const ST = { discProdL: styleAt(sDisc, 22, "L22", 84), discLine: styleAt(sDisc, 24, "H24", 83) };
+    // quotation format (Nov 2026): category bar bold; model + description left; qty, prices, amounts and total centred
+    ST.banner = deriveStyle(18, { fontId: boldFont(18) });
+    ST.model = deriveStyle(19, { horizontal: "left" });
+    ST.desc = deriveStyle(20, { horizontal: "left" });
+    ST.qty = deriveStyle(25, { horizontal: "center" });
+    ST.money = deriveStyle(45, { numFmtId: 4, horizontal: "center" });
+    // "No Stock" label: yellow background, bold black, between the features and the photo
+    ST.stock = deriveStyle(7, { fillId: solidFill("FFFFFF00"), fontId: boldFont(7), horizontal: "center" });
+    const STOCK_TEXT = spec.no_stock_text || "NO STOCK";
+    let stockPending = [];
+    const quoteDay = spec.date ? isoToDate(spec.date) : new Date();
+    const stockLines = p => {
+      if (!p.noStock) return [];
+      const L = [STOCK_TEXT];
+      if (p.noStockUntil) { const d = isoToDate(String(p.noStockUntil).slice(0, 10)); if (!isNaN(d) && d >= quoteDay) L.push("Arrival on or about", `${pad2(d.getUTCDate())}-${MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()}`); }
+      return L;
+    };
     const ex = p => ({ unit: p.price, normal: p.normal || p.price });   // unit prices INCLUDING VAT
     const newRows = [], merges = [], productRows = [], links = [];
     const headingXml = r => (discount ? rowOf(sDisc, r) : "") || rowOf(s, r);
@@ -314,16 +369,17 @@
         rx = rx.replace(/<row r="\d+"/, `<row r="${r}"`).replace(/(<c r=")([A-Z]+)\d+(")/g, (m, a, col, b) => a + col + r + b);
         newRows.push(rx);
       } else if (kind === "banner") {
-        const cells = cell(`B${r}`, 18, { text: item[1] }) + [..."CDEFGHIJ"].map(x => cell(`${x}${r}`, 18)).join("") + cell(`L${r}`, 55) + cell(`M${r}`, 56);
+        const cells = cell(`B${r}`, ST.banner, { text: item[1] }) + [..."CDEFGHIJ"].map(x => cell(`${x}${r}`, ST.banner)).join("") + cell(`L${r}`, 55) + cell(`M${r}`, 56);
         newRows.push(`<row r="${r}" s="2" customFormat="1" ht="18" spans="2:13">${cells}</row>`); merges.push(`B${r}:J${r}`);
       } else if (kind === "product") {
         const p = item[1], qty = p.qty || 1, e = ex(p), amount = qty * e.unit; amountSum += amount;
         let cells;
-        if (discount) cells = cell(`B${r}`, 19, { text: p.model }) + cell(`C${r}`, 20, { text: p.name }) + cell(`D${r}`, 21) + cell(`E${r}`, 22) + cell(`F${r}`, 22)
-          + cell(`G${r}`, 25, { num: qty }) + cell(`H${r}`, 45, { num: e.normal }) + cell(`I${r}`, 45, { num: e.unit }) + cell(`J${r}`, 45, { num: amount, formula: `I${r}*G${r}` }) + cell(`L${r}`, ST.discProdL);
-        else cells = cell(`B${r}`, 19, { text: p.model }) + cell(`C${r}`, 20, { text: p.name }) + cell(`D${r}`, 21) + cell(`E${r}`, 22) + cell(`F${r}`, 23) + cell(`G${r}`, 24)
-          + cell(`H${r}`, 25, { num: qty }) + cell(`I${r}`, 45, { num: e.unit }) + cell(`J${r}`, 45, { num: amount, formula: `H${r}*I${r}` }) + cell(`L${r}`, 57);
+        if (discount) cells = cell(`B${r}`, ST.model, { text: p.model }) + cell(`C${r}`, ST.desc, { text: p.name }) + cell(`D${r}`, 21) + cell(`E${r}`, 22) + cell(`F${r}`, 22)
+          + cell(`G${r}`, ST.qty, { num: qty }) + cell(`H${r}`, ST.money, { num: e.normal }) + cell(`I${r}`, ST.money, { num: e.unit }) + cell(`J${r}`, ST.money, { num: amount, formula: `I${r}*G${r}` }) + cell(`L${r}`, ST.discProdL);
+        else cells = cell(`B${r}`, ST.model, { text: p.model }) + cell(`C${r}`, ST.desc, { text: p.name }) + cell(`D${r}`, 21) + cell(`E${r}`, 22) + cell(`F${r}`, 23) + cell(`G${r}`, 24)
+          + cell(`H${r}`, ST.qty, { num: qty }) + cell(`I${r}`, ST.money, { num: e.unit }) + cell(`J${r}`, ST.money, { num: amount, formula: `H${r}*I${r}` }) + cell(`L${r}`, 57);
         newRows.push(`<row r="${r}" s="${discount ? 4 : 3}" customFormat="1" spans="2:12">${cells}</row>`);
+        stockPending = stockLines(p);
         const nBody = (p.features || []).length + (p.capacity ? 1 : 0) + (p.dims || []).length;
         productRows.push([r, nBody, p]);
       } else {
@@ -339,8 +395,14 @@
         }
         const tailCells = discount ? cell(`E${r}`, 22) + cell(`F${r}`, 22) + cell(`G${r}`, 25) + cell(`H${r}`, ST.discLine) + cell(`I${r}`, ST.discLine) + cell(`J${r}`, ST.discLine) + cell(`L${r}`, 60)
           : cell(`E${r}`, 22) + cell(`F${r}`, 31) + cell(`G${r}`, 32) + cell(`H${r}`, 28) + cell(`I${r}`, 28) + cell(`J${r}`, 28) + cell(`L${r}`, 57);
-        const cells = kind === "blank" ? cell(`B${r}`, 29) + cell(`C${r}`, 7) + cell(`D${r}`, 7) + tailCells
+        let cells = kind === "blank" ? cell(`B${r}`, 29) + cell(`C${r}`, 7) + cell(`D${r}`, 7) + tailCells
           : cell(`B${r}`, 29) + cell(`C${r}`, cStyle, cOpt) + cell(`D${r}`, dStyle, dOpt) + tailCells;
+        if (stockPending.length && kind !== "blank") {      // lines under a No Stock product: label in F:G ("NO STOCK", "until \u2026")
+          cells = cells.replace(new RegExp(`<c r="F${r}"[^>]*?(?:\\/>|>[\\s\\S]*?<\\/c>)`), cell(`F${r}`, ST.stock, { text: stockPending.shift() }))
+                       .replace(new RegExp(`<c r="G${r}"[^>]*?(?:\\/>|>[\\s\\S]*?<\\/c>)`), cell(`G${r}`, ST.stock));
+          merges.push(`F${r}:G${r}`);
+        }
+        if (kind === "blank") stockPending = [];
         newRows.push(`<row r="${r}" s="${discount ? 4 : 3}" customFormat="1" spans="2:12">${cells}</row>`);
       }
     });
@@ -365,7 +427,10 @@
         else if (txt) rx = setCellInRow(rx, `${col}${r}`, `<v>${sidx(txt)}</v>`, ' t="s"');
         else rx = setCellInRow(rx, `${col}${r}`, "", "");
       }
-      if (r === R.totals[2]) rx = rx.replace(/<f>[^<]*<\/f>/, `<f>SUM(J${R.headings[0]}:J${R.blankBeforeTotals})</f>`);
+      if (r === R.totals[2]) {
+        rx = rx.replace(/<f>[^<]*<\/f>/, `<f>SUM(J${R.headings[0]}:J${R.blankBeforeTotals})</f>`);
+        rx = rx.replace(new RegExp(`(<c r="J${r}"[^>]*?\\ss=")(\\d+)(")`), (m, a, st, b) => a + deriveStyle(+st, { numFmtId: 4, horizontal: "center" }) + b);
+      }
       if (totalsVal[r] != null) rx = rx.replace(new RegExp(`(<c r="J${r}"[^>]*><f>[^<]*</f><v>)[^<]*(</v>)`), (m, a, b) => a + totalsVal[r] + b);
       const nr = newrow(r);
       if (nr !== r || r > R.header) {
@@ -444,7 +509,7 @@
     const EMU_PX = 9525, ROW_EMU = Math.floor(14.4 * 12700);
     const colEmu = { 6: 72 * EMU_PX, 7: 114 * EMU_PX, 8: 114 * EMU_PX, 9: 113 * EMU_PX };
     const regionW = colEmu[6] + colEmu[7] + colEmu[8] + colEmu[9];
-    const xAnchor = x => { let col = 6; while (col < 9 && x >= colEmu[col]) { x -= colEmu[col]; col++; } return [col, Math.floor(x)]; };
+    const xAnchor = (x, col = 6) => { while (col < 9 && x >= colEmu[col]) { x -= colEmu[col]; col++; } return [col, Math.floor(x)]; };
     productRows.forEach(([prow, nBody, p], idx) => {
       const img = images[p.model];
       if (!img) { warnings.push(`No photo for ${p.model}`); return; }
@@ -452,7 +517,9 @@
       let h = Math.min(2400000, nBody * ROW_EMU - 90000), w = Math.floor(h * aspect);
       if (w > 3000000) { w = 3000000; h = Math.floor(w / aspect); }
       if (h <= 0) return;
-      const x = Math.floor((regionW - w) / 2), [fc, fo] = xAnchor(x), [tc, to] = xAnchor(x + w);
+      const c0 = p.noStock ? 7 : 6, rw = p.noStock ? regionW - colEmu[6] : regionW;   // No Stock: label in F:G, photo in H..J
+      if (w > rw - 20000) { w = rw - 20000; h = Math.floor(w / aspect); }
+      const x = Math.floor((rw - w) / 2), [fc, fo] = xAnchor(x, c0), [tc, to] = xAnchor(x + w, c0);
       const rowsH = Math.floor((h + 20000) / ROW_EMU), rem = h + 20000 - rowsH * ROW_EMU;
       const name = `quote_photo_${pad2(i)}.jpeg`, rid = `rIdQ${i}`;
       files.set(`xl/media/${name}`, img.bytes);
@@ -517,6 +584,7 @@
     sst = sst.replace(/ count="(\d+)"/, (m, n) => ` count="${+n + newSi.length}"`);
     put("xl/sharedStrings.xml", sst);
 
+    put("xl/styles.xml", stylesXml);
     return { bytes: await zip(files), warnings, total: amountSum, totalExVat: amountSum / VAT };
   }
 
@@ -529,6 +597,7 @@
     if (nb.includes("ufesa")) return "UFESA";
     if (/\bde fan\b|dragon electronics/.test(nb) || (brand && brand !== "lg" && n.includes("fan"))) return "DE Fan";
     if (brand && brand !== "lg") return null;
+    if (/bracket|wall mount/.test(n)) return null;
     if (n.includes("washtower")) return "LG WashTower";
     if (n.includes("dishwasher")) return "LG Dishwasher";
     if (n.includes("refrigerator") || n.includes("freezer")) return "LG Refrigerator";
@@ -636,6 +705,7 @@
   #dq-cat .ct{flex:1}#dq-cat .ct.need{color:#c8102e}
   #dq-catupd{padding:4px 10px;border:1px solid #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap}
   #dq-catupd:disabled{color:#999;border-color:#bbb;cursor:wait}
+  #dq-panel .sgi .tag{display:inline-block;margin-left:4px;padding:0 4px;border-radius:3px;background:#eee;color:#555;font-size:10px;font-weight:normal}
   #dq-catbar{height:4px;background:#eee;border-radius:2px;margin:-4px 0 8px;display:none}#dq-catbar div{height:100%;width:0;background:#c8102e;border-radius:2px;transition:width .2s}`;
   const st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);
 
@@ -659,6 +729,8 @@
     <fieldset><legend>Products</legend>
       <div id="dq-cat"><div class="ct" id="dq-catstat"></div><button type="button" id="dq-catupd">Update product list</button></div>
       <div id="dq-catbar"><div></div></div>
+      <div id="dq-pos" class="hint" style="margin:-2px 0 8px">Full range incl. products not on the website: <a href="#" id="dq-poslink" style="color:#c8102e">load the POS product list (FEATURES.TXT)</a><span id="dq-posstat"></span>
+        <input type="file" id="dq-posfile" accept=".txt,.TXT,text/plain" style="display:none"></div>
       <div class="hint">Type part of a model or name (e.g. <b>X31</b> or <b>850L</b>) and pick from the list. Quantity empty = 1. Tick <b>Discount</b> to type your own price, incl. VAT.</div>
       <div id="dq-rows"></div>
       <button type="button" id="dq-addrow">+ Add product</button>
@@ -743,7 +815,7 @@
       sgItems = searchCatalog(val, 8); sgAct = sgItems.length ? 0 : -1;
       if (!sgItems.length) { sgBox.innerHTML = `<div class="sgnone">No saved product matches "${h(val)}". Check the model, or update the product list.</div>`; sgBox.style.display = "block"; return; }
       sgBox.innerHTML = sgItems.map((p, i) => `<div class="sgi${i === 0 ? " act" : ""}" data-i="${i}"><span class="ph" data-id="${h(p.id)}"></span>`
-        + `<div class="tx"><b>${h(p.model)}</b><span>${h(p.name)}</span></div>`
+        + `<div class="tx"><b>${h(p.model)}${p.offWeb ? `<span class="tag">not on website</span>` : ""}</b><span>${h(p.name)}</span></div>`
         + `<div class="pr">${fmt(p.retail)}${p.promo ? `<i>Promo ${fmt(p.promo)}</i>` : ""}</div></div>`).join("");
       sgBox.style.display = "block";
       sgBox.querySelectorAll(".sgi").forEach(el => el.addEventListener("mousedown", e => { e.preventDefault(); sgPick(+el.dataset.i); }));
@@ -888,6 +960,7 @@
       category: crumbs.length >= 3 ? crumbs[1] : (topCat || "Products"),
       retail, promo: sale && retail && sale < retail ? sale : null, promoValid,
       noStock: meta._no_stock === "yes" || p.stockStatus === "OUT_OF_STOCK",
+      noStockUntil: meta._no_stock_until === "yes" && /^\d{4}-\d{2}-\d{2}/.test(meta._no_stock_until_date || "") ? meta._no_stock_until_date.slice(0, 10) : null,
       features, notes, dims, capacity,
       image: (doc.querySelector('meta[property="og:image"]') || {}).content || null,
       checked: new Date().toISOString()
@@ -898,8 +971,8 @@
   const IDB = (() => {
     let dbp = null;
     const open = () => dbp || (dbp = new Promise((res, rej) => {
-      const r = indexedDB.open("dq-products", 1);
-      r.onupgradeneeded = () => { const db = r.result; db.createObjectStore("products", { keyPath: "id" }); db.createObjectStore("photos", { keyPath: "id" }); };
+      const r = indexedDB.open("dq-products", 2);
+      r.onupgradeneeded = () => { const db = r.result; for (const s of ["products", "photos", "pos"]) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: "id" }); };
       r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
     }));
     const run = async (store, mode, fn) => {
@@ -908,28 +981,45 @@
     };
     return {
       get: (s, k) => run(s, "readonly", o => o.get(k)), put: (s, v) => run(s, "readwrite", o => o.put(v)),
-      all: s => run(s, "readonly", o => o.getAll()), keys: s => run(s, "readonly", o => o.getAllKeys())
+      all: s => run(s, "readonly", o => o.getAll()), keys: s => run(s, "readonly", o => o.getAllKeys()),
+      replaceAll: (s, list) => run(s, "readwrite", o => { o.clear(); list.forEach(v => o.put(v)); return null; })
     };
   })();
-  const catalog = new Map(), alias = new Map();
+  const catalog = new Map(), alias = new Map();      // website products (saved copies)
+  const posMap = new Map();                             // POS product list = the full range
+  const onWebsite = id => { const p = catalog.get(id); return !!(p && !p.removed); };
+  // a product that is not on the website now, as it will be quoted: POS price, saved website description/photo if any
+  function offWebView(P) {
+    const w = catalog.get(P.id);
+    if (w) return Object.assign({}, w, { retail: P.retail, promo: null, promoValid: null, url: null, noStock: false, stale: false, pos: true, offWeb: true, posAsAt: P.posAsAt, descFrom: "website" });
+    return Object.assign({}, P, { offWeb: true, descFrom: "pos" });
+  }
   const remember = p => { catalog.set(p.id, p); (p.keys || [p.id]).forEach(k => alias.set(k, p.id)); };
   const findSaved = model => { const id = alias.get(norm(model)); return id ? catalog.get(id) : null; };
   const catInfo = () => store.get("catalog_info", null);
   function catStatus() {
     const info = catInfo(), n = [...catalog.values()].filter(p => !p.removed).length;
     const el = $("dq-catstat");
+    if (!n && posMap.size) { el.className = "ct need"; el.textContent = `${posMap.size} products from the POS list. Load the website list too, for photos, promo prices and the full descriptions.`; $("dq-catupd").textContent = "Load product list"; return; }
     if (!n) { el.className = "ct need"; el.textContent = "No product list yet. Load it once (about 2 minutes) to get model suggestions and faster quotes."; $("dq-catupd").textContent = "Load product list"; return; }
     const d = info && info.date ? new Date(info.date) : null, old = d && (Date.now() - d) > 7 * 86400000;
     el.className = "ct" + (old ? " need" : "");
-    el.textContent = `${n} products saved${d ? " \u00b7 updated " + DQCore.fmtDate(d) : ""}${old ? " \u00b7 update recommended" : ""}`;
+    const off = [...posMap.keys()].filter(id => !onWebsite(id)).length;
+    el.textContent = `${n} on the website${off ? ` + ${off} more from the POS list` : ""}${d ? " \u00b7 updated " + DQCore.fmtDate(d) : ""}${old ? " \u00b7 update recommended" : ""}`;
+    const pi = store.get("pos_info", null);
+    $("dq-posstat").textContent = pi ? ` \u00b7 loaded: list of ${pi.asAt} (${pi.count} products)` : "";
     $("dq-catupd").textContent = "Update product list";
   }
-  (async () => { try { (await IDB.all("products")).forEach(remember); } catch (e) { /* no storage */ } catStatus(); })();
+  (async () => {
+    try { (await IDB.all("products")).forEach(remember); (await IDB.all("pos")).forEach(p => posMap.set(p.id, p)); } catch (e) { /* no storage */ }
+    catStatus();
+  })();
   function searchCatalog(q, max) {
     const toks = q.toLowerCase().split(/\s+/).filter(Boolean), qn = norm(q).toLowerCase();
     const res = [];
-    for (const p of catalog.values()) {
-      if (p.removed) continue;
+    const pool = [...catalog.values()].filter(p => !p.removed);
+    for (const P of posMap.values()) if (!onWebsite(P.id)) pool.push(offWebView(P));
+    for (const p of pool) {
       const mk = norm(p.model).toLowerCase(), hay = `${p.model} ${p.name} ${p.category}`.toLowerCase(), hayN = hay.replace(/[\s\-]/g, "");
       let score = -1;
       if (mk === qn) score = 0;
@@ -998,16 +1088,108 @@
     } finally { btn.disabled = false; bar.style.display = "none"; }
   });
 
+  // ------------------------------------------------------------------ POS product list (FEATURES.TXT) \u2013 only for products NOT on the website
+  const CP437 = "\u00c7\u00fc\u00e9\u00e2\u00e4\u00e0\u00e5\u00e7\u00ea\u00eb\u00e8\u00ef\u00ee\u00ec\u00c4\u00c5\u00c9\u00e6\u00c6\u00f4\u00f6\u00f2\u00fb\u00f9\u00ff\u00d6\u00dc\u00a2\u00a3\u00a5\u20a7\u0192\u00e1\u00ed\u00f3\u00fa\u00f1\u00d1\u00aa\u00ba\u00bf\u2310\u00ac\u00bd\u00bc\u00a1\u00ab\u00bb\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255d\u255c\u255b\u2510\u2514\u2534\u252c\u251c\u2500\u253c\u255e\u255f\u255a\u2554\u2569\u2566\u2560\u2550\u256c\u2567\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256b\u256a\u2518\u250c\u2588\u2584\u258c\u2590\u2580\u03b1\u00df\u0393\u03c0\u03a3\u03c3\u00b5\u03c4\u03a6\u0398\u03a9\u03b4\u221e\u03c6\u03b5\u2229\u2261\u00b1\u2265\u2264\u2320\u2321\u00f7\u2248\u00b0\u2219\u00b7\u221a\u207f\u00b2\u25a0\u00a0";
+  function posText(buf) {
+    const u8 = new Uint8Array(buf);
+    try {   // saved as UTF-8 from a DOS (code page 437) print: letters like \u00e0/\u00f8 stand for \u03b1/\u00b0
+      return new TextDecoder("utf-8", { fatal: true }).decode(u8).replace(/[\u0080-\u00ff]/g, c => CP437[c.charCodeAt(0) - 0x80]);
+    } catch (e) { let s = ""; for (const b of u8) s += b < 0x80 ? String.fromCharCode(b) : CP437[b - 0x80]; return s; }
+  }
+  const titleCase = s => s.toLowerCase().replace(/\b[a-z]/g, c => c.toUpperCase()).replace(/\bTv\b/g, "TV").replace(/\bXboom\b/g, "XBOOM");
+  const POS_CAT = { "TV": "TV", "WASHING MACHINE": "Washer & Dryer", "DRYER": "Washer & Dryer", "WASHER DRYER TOWER": "Washer & Dryer", "REFRIGERATOR": "Refrigerator & Freezer",
+    "FREEZER ONLY": "Refrigerator & Freezer", "MICROWAVE OVEN": "Microwave", "AIR CONDITIONER": "Air Conditioner", "DISHWASHER": "Dishwasher", "XBOOM 1-BODY": "Audio",
+    "XBOOM PARTY SPEAKER": "Audio", "HOME THEATER SYSTEM": "Audio", "KITCHEN HOOD": "Kitchen Hood", "BUILT-IN APPLIANCE": "Built-In Appliance", "VACUUM CLEANER": "Vacuum Cleaner",
+    "ELECTRIC FAN": "Electric Fan", "DEHUMIDIFIER": "Dehumidifier", "COOKER": "Cooker", "STYLER": "Steam Clothing Care", "TV WALL BRACKET": "TV Wall Bracket" };
+  function posToProduct(r, asAt) {
+    const brand = r.brand === "H ARISTON" ? "ARISTON" : r.brand === "DE" ? "DE Fan" : r.brand === "OTHER" ? "" : r.brand;
+    const L = r.lines.slice();
+    // name: first line when it already starts with the brand, else "Brand Category"
+    let name;
+    if (brand && L[0] && L[0].toUpperCase().startsWith(brand.split(" ")[0].toUpperCase())) name = L.shift();
+    else name = [brand === "DE Fan" ? "DE" : brand, titleCase(r.category)].filter(Boolean).join(" ");
+    // notes: last block when it starts with "*" (continuation lines joined)
+    const blocks = []; let cur = [];
+    for (const l of L) { if (!l.trim()) { if (cur.length) blocks.push(cur); cur = []; } else cur.push(l.trim()); }
+    if (cur.length) blocks.push(cur);
+    const notes = [];
+    if (blocks.length && blocks[blocks.length - 1][0].startsWith("*")) {
+      for (const l of blocks.pop()) { if (l.startsWith("*") || !notes.length) notes.push(l); else notes[notes.length - 1] += " " + l; }
+    }
+    const features = [], dims = [], weights = [];
+    let mode = null, capacity = [];
+    const DIM = /W\s?[\d.]+\s*[xX]\s*D\s?[\d.]+\s*[xX]\s*H\s?[\d.]+\s*cm/;
+    const lab = s => { s = s.replace(/[:\s]+$/, "").trim(); return !s || /^(dimensions?|weight|net weight|product)$/i.test(s) ? "Product" : s.replace(/^with box$/i, "Product with Box").replace(/^weight\s+/i, ""); };
+    for (const b of blocks) for (const l of b) {
+      if (/^(key features|specs):?$/i.test(l)) continue;
+      if (/^dimensions?:?$/i.test(l)) { mode = "dim"; continue; }
+      if (/^weight:?$/i.test(l)) { mode = "wt"; continue; }
+      if (/^net capacity:?$/i.test(l)) { mode = "cap"; continue; }
+      const dm = l.match(DIM), wm = l.match(/^(.*?)\s*:?\s*([\d.]+\s*Kg)$/i);
+      if (dm) { dims.push([lab(l.slice(0, dm.index)), dm[0].replace(/\s*x\s*/g, " X ")]); continue; }
+      if (wm && (mode === "wt" || /weight/i.test(l))) { weights.push([lab(wm[1]), wm[2].replace(/\s+/g, "")]); continue; }
+      if (mode === "cap" && /\d\s*L$/i.test(l)) { capacity.push(l.replace(/\s+/g, " ")); continue; }
+      features.push(l.replace(/\s{2,}/g, " "));
+    }
+    for (const [lb, w] of weights) {
+      const d = dims.find(x => x[0].toLowerCase() === lb.toLowerCase()) || (lb === "Product" && dims.find(x => /^with stand$/i.test(x[0])));
+      if (d) d[1] += " | " + w; else dims.push([lb, w]);
+    }
+    if (dims.length && /^with stand$/i.test(dims[0][0])) dims[0][0] = "Product";
+    return {
+      id: norm(r.model), keys: [norm(r.model)], model: r.model, name, brand: brand || null, url: null,
+      category: POS_CAT[r.category] || titleCase(r.category), retail: r.price, promo: null, promoValid: null, noStock: false,
+      features, notes, dims, capacity: capacity.length ? capacity.join("  |  ") : null, image: null,
+      checked: new Date().toISOString(), pos: true, posAsAt: asAt, posCode: r.code
+    };
+  }
+  function parsePosList(text) {
+    const lines = text.split(/\r?\n/);
+    const hdr = lines.find(l => l.startsWith("|P.CODE"));
+    if (!hdr) throw new Error("this is not the POS product list (no P.CODE header)");
+    const asAt = ((text.match(/PRODUCT LIST AS AT\s+([\d\/]+)/) || [])[1]) || "";
+    const bars = []; for (let i = 0; i < hdr.length; i++) if (hdr[i] === "|") bars.push(i);
+    const cut = l => bars.slice(0, -1).map((b, i) => (l.slice(b + 1, bars[i + 1]) || "").trim());
+    const recs = []; let cur = null;
+    for (const l of lines) {
+      if (!l.startsWith("|") || l.startsWith("|P.CODE") || /^\|\s*\|BRAND\s/.test(l)) continue;
+      const [code, c2, c3, feat, price] = cut(l);
+      if (code) { cur = { code, category: c2, type: c3, lines: feat ? [feat] : [], price: Number(String(price).replace(/,/g, "")) || null, brand: "", model: "", n: 1 }; recs.push(cur); }
+      else if (cur) { cur.n++; if (cur.n === 2) { cur.brand = c2; cur.model = c3; } cur.lines.push(feat); }
+    }
+    return { asAt, recs: recs.filter(r => r.model && r.price) };
+  }
+  $("dq-poslink").addEventListener("click", e => { e.preventDefault(); $("dq-posfile").click(); });
+  $("dq-posfile").addEventListener("change", async e => {
+    const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+    try {
+      const { asAt, recs } = parsePosList(posText(await file.arrayBuffer()));
+      if (!recs.length) throw new Error("no product found in the file");
+      const list = recs.map(r => posToProduct(r, asAt));
+      await IDB.replaceAll("pos", list);
+      posMap.clear(); list.forEach(p => posMap.set(p.id, p));
+      store.set("pos_info", { asAt, count: list.length, date: new Date().toISOString() });
+      catStatus();
+      const off = list.filter(p => !onWebsite(p.id));
+      const diff = list.filter(p => onWebsite(p.id) && catalog.get(p.id).retail !== p.retail);
+      log(`\u2713 POS list of ${h(asAt)} loaded: ${list.length} products${catalog.size ? `, ${list.length - off.length} also on the website, <b>${off.length} not on the website</b> (quoted with the POS price)` : ""}.`
+        + (diff.length ? ` <span class="warn">Normal price different on the website: ${diff.slice(0, 15).map(p => `${h(p.model)} POS ${fmt(p.retail)} / web ${fmt(catalog.get(p.id).retail)}`).join("; ")}${diff.length > 15 ? "; \u2026" : ""}.</span>` : ""), "ok");
+    } catch (err) { log("\u2717 POS list not added: " + h(err.message || err), "err"); }
+  });
+
   // Live lookup at quote time: always reads the current page (prices change); the saved list gives the
   // page address, the photo, and a fallback when the product has been removed from the website.
+  // Order: 1) the website now  2) not on the website -> POS list price (description/photo from the saved
+  // website copy, else the POS text)  3) only a saved website copy -> used with a warning.
   async function readProduct(model) {
-    const saved = findSaved(model);
-    let url = saved ? saved.url : await productUrl(model);
+    const saved = findSaved(model), P = posMap.get(norm(model)) || (saved && posMap.get(saved.id));
+    let url = saved && saved.url ? saved.url : await productUrl(model);
     let r = await fetch(url, { cache: "no-store" }).catch(() => null);
     if ((!r || !r.ok) && saved) { const u2 = await productUrl(model); if (u2 !== url) { url = u2; r = await fetch(url, { cache: "no-store" }).catch(() => null); } }
     if (!r || !r.ok) {
+      if (P) return offWebView(P);
       if (saved) return Object.assign({}, saved, { stale: true });
-      throw new Error("not on the website \u2013 it may have been removed, or check the model code");
+      throw new Error("not on the website" + (posMap.size ? " and not in the POS list" : "") + " \u2013 check the model code");
     }
     let d = null;
     try { d = parseProductPage(await r.text(), r.url); } catch (e) { d = null; }
@@ -1167,11 +1349,11 @@
           const usePromo = own == null && $("dq-price").value === "promo" && d.promo;
           const price = own != null ? own : usePromo ? d.promo : d.retail;
           if (own != null && own >= d.retail) problems.push(`${d.model}: your price ${fmt(own)} is not below the website price ${fmt(d.retail)}`);
-          products.push({ category: d.category, brand: d.brand, model: d.model, name: d.name, qty: it.qty, price, normal: d.retail, url: d.url, features: d.features, capacity: d.capacity, dims: d.dims, notes: d.notes, _d: d, _promo: usePromo, _own: own != null });
+          products.push({ noStock: !!d.noStock && !d.offWeb, noStockUntil: d.noStockUntil || null, category: d.category, brand: d.brand, model: d.model, name: d.name, qty: it.qty, price, normal: d.retail, url: d.url, features: d.features, capacity: d.capacity, dims: d.dims, notes: d.notes, _d: d, _promo: usePromo, _own: own != null });
           try { const im = await savedPhoto(d); if (im) images[d.model] = im; } catch (e) { problems.push(`${d.model}: photo could not be read`); }
           if (d.stale) problems.push(`${d.model}: not on the website any more \u2013 details and price taken from the saved product list (${DQCore.fmtDate(new Date(d.checked))}). Check them.`);
-          line.className = "ok"; line.innerHTML = `\u2713 ${h(d.model)} \u2013 ${h(d.name)} \u2013 ${fmt(price)}${own != null ? ` <span class='warn'>(your price; website ${fmt(d.retail)})</span>` : ""}${d.noStock ? " <span class='warn'>(No Stock on website)</span>" : ""}${d.stale ? " <span class='warn'>(saved copy \u2013 removed from website)</span>" : ""}`;
-          if (!d.dims.length) problems.push(`${d.model}: no dimensions on the website`);
+          line.className = "ok"; line.innerHTML = `\u2713 ${h(d.model)} \u2013 ${h(d.name)} \u2013 ${fmt(price)}${own != null ? ` <span class='warn'>(your price; website ${fmt(d.retail)})</span>` : ""}${d.noStock && !d.offWeb ? ` <span class='warn'>(No Stock on website${d.noStockUntil ? " \u2013 arrival on or about " + h(DQCore.fmtDate(new Date(d.noStockUntil + "T12:00:00"))) : ""})</span>` : ""}${d.stale ? " <span class='warn'>(saved copy \u2013 removed from website)</span>" : ""}${d.offWeb ? " <span class='warn'>(not on the website \u2013 POS price)</span>" : ""}`;
+          if (!d.dims.length) problems.push(`${d.model}: no dimensions ${d.descFrom === "pos" ? "in the POS list" : "on the website"}`);
         } catch (e) {
           line.className = "err"; line.innerHTML = `\u2717 ${h(it.model)}: ${h(e.message)}`; problems.push(`${it.model}: ${e.message}`);
         }
@@ -1195,6 +1377,13 @@
         warranties: [...new Set(products.map(DQCore.warrantyFor).filter(Boolean))], products
       };
       products.forEach(p => { if (!DQCore.warrantyFor(p)) problems.push(`${p.model}: no matching warranty line \u2013 check the Terms`); });
+      const offOnes = products.filter(p => p._d.offWeb);
+      if (offOnes.length) {
+        const wd = offOnes.filter(p => p._d.descFrom === "website").map(p => p.model), pd = offOnes.filter(p => p._d.descFrom === "pos").map(p => p.model);
+        problems.unshift(`Not on the website now \u2013 normal price from the POS list of ${offOnes[0]._d.posAsAt}, no promo, no "More info" link.`
+          + (wd.length ? ` Description and photo from the last saved website copy: ${wd.join(", ")}.` : "")
+          + (pd.length ? ` Description from the POS list (no photo): ${pd.join(", ")} \u2013 check the wording.` : ""));
+      }
       log("Building the Excel file\u2026");
       const res = await DQCore.buildQuote(template, spec, images);
       const fname = `Quotation_${spec.quote_no.replace(/\s*\|\s*/g, "-").replace(/[^\w\-]+/g, "_")}_${to.replace(/^(mr|mrs|ms|miss|dr)\.?\s+/i, "").replace(/[^\w]+/g, "_")}.xlsx`;
@@ -1206,7 +1395,8 @@
       const promoRows = products.filter(p => !p._promo && !p._own && p._d.promo);
       let html = `<div class="hint">Prices incl. VAT</div><table><tr><th>Model</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr>${products.map(p => `<tr><td>${h(p.model)}</td><td class="n">${p.qty}</td><td class="n">${fmt(p.price)}</td><td class="n">${fmt(p.qty * p.price)}</td></tr>`).join("")}<tr><th colspan="3">Total incl. VAT</th><th class="n">${fmt(res.total)}</th></tr></table>`;
       if (promoRows.length) html += `<div class="warn" style="margin-top:6px">Promo prices available: ${promoRows.map(p => `${h(p.model)} ${fmt(p._d.promo)}${p._d.promoValid ? " until " + h(p._d.promoValid) : ""}`).join("; ")}.</div>`;
-      [...problems, ...res.warnings].forEach(w => { html += `<div class="warn">\u26a0 ${h(w)}</div>`; });
+      const posSet = new Set(products.filter(p => p._d.descFrom === "pos").map(p => "No photo for " + p.model));
+      [...problems, ...res.warnings.filter(w => !posSet.has(w))].forEach(w => { html += `<div class="warn">\u26a0 ${h(w)}</div>`; });
       html += `<a class="dl" href="${url}" download="${h(fname)}">\u2b07 Download ${h(fname)}</a><div class="hint">For the PDF: open the file in Excel \u2192 File \u2192 Save as \u2192 PDF.</div>`;
       log(html);
       noEdited = false; suggestNo();
