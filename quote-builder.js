@@ -84,7 +84,7 @@
   // ("NO Disc" sheet; the "With Disc Column" sheet is only used for its two heading rows)
   const R = {
     headings: [19, 20], header: 20, example: range(21, 36), blankBeforeTotals: 37, totals: [38, 39, 40], terms: 42,
-    attention: 14, tel: 15, mobile: 16, email: 17,
+    attention: 14, tel: 15, mobile: 16, email: 17, sigRows: [92, 93, 94], sigName: 95, sigLine: 96,
     pay: { full: 45, days: 46 }, delivery: 47, transport: 48, validUntil: 49,
     warranty: range(52, 77), install: 83, stainless: 85, closing: 87, last: 97
   };
@@ -213,12 +213,34 @@
     let addr = cust.address || []; if (typeof addr === "string") addr = addr.split(/\n/).map(x => x.trim()).filter(Boolean);
     const to = isCompany ? String(cust.to || "").toUpperCase() : cust.to;
     edit(9, "C", to || null); edit(10, "C", addr[0] || null); edit(11, "C", addr[1] || null);
-    edit(12, "C", addr[2] || null); edit(13, "C", addr.slice(3).join(", ") || null);
+    // company VAT / BRN go on the two free lines under the address (the panel has two address lines)
+    const ids = isCompany ? [["VAT:", cust.vat], ["BRN:", cust.brn]].filter(x => x[1] && String(x[1]).trim()) : [];
+    if (ids.length && addr.length <= 2) {
+      [12, 13].forEach((r, i) => { if (ids[i]) { edit(r, "B", ids[i][0]); edit(r, "C", String(ids[i][1]).trim()); } else edit(r, "C", null); });
+    } else { edit(12, "C", addr[2] || null); edit(13, "C", addr.slice(3).join(", ") || null); }
     if (isCompany) edit(R.attention, "C", cust.attention || null);
     else DELETE.add(R.attention);
-    edit(R.tel, "C", cust.tel || null); edit(R.mobile, "C", cust.mobile || null);
+    if (cust.tel) edit(R.tel, "C", cust.tel); else DELETE.add(R.tel);
+    if (cust.mobile) edit(R.mobile, "C", cust.mobile); else DELETE.add(R.mobile);      // empty contact lines are left out
     if (cust.email) edit(R.email, "C", cust.email); else DELETE.add(R.email);
     edit(10, "J", spec.quote_no || null);
+    // signature: name + "Title | branch phone | branch email"; the template's signature image only for its own person
+    const tplCell = (r, col) => {
+      const c = (rowOf(s, r).match(new RegExp(`<c r="${col}${r}"[^>]*?(?:\\/>|>[\\s\\S]*?<\\/c>)`)) || [""])[0];
+      const v = (c.match(/<v>([^<]*)<\/v>/) || [])[1];
+      if (/t="s"/.test(c) && v != null) return ((sst.match(/<si>[\s\S]*?<\/si>/g) || [])[+v] || "").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").trim();
+      return ((c.match(/<t[^>]*>([^<]*)<\/t>/) || [])[1] || "").trim();
+    };
+    const tplSigName = tplCell(R.sigName, "B"), tplSigLine = tplCell(R.sigLine, "B");
+    const signer = spec.signer && spec.signer.name ? spec.signer : null;
+    const nm = x => String(x || "").toUpperCase().replace(/\s+/g, " ").trim();
+    const hasSigImage = !signer || nm(signer.name) === nm(tplSigName);
+    if (signer) {
+      const suffix = tplSigLine.includes("|") ? tplSigLine.slice(tplSigLine.indexOf("|")) : "";
+      edit(R.sigName, "B", signer.name);
+      edit(R.sigLine, "B", signer.line || ((signer.title || "") + (suffix ? " " + suffix : "")).trim());
+    }
+    if (!hasSigImage) R.sigRows.forEach(r => DELETE.add(r));      // no image: name follows "Yours sincerely," directly
     if (spec.date) edit(9, "J", null, { num: Math.round((isoToDate(spec.date) - Date.UTC(1899, 11, 30)) / 86400000) });
 
     // payment
@@ -244,7 +266,7 @@
       if (vd.getUTCDay() === 6) vd = new Date(vd.getTime() - 86400000); else if (vd.getUTCDay() === 0) vd = new Date(vd.getTime() - 2 * 86400000);
     }
     SHOW.add(R.validUntil);
-    edit(R.validUntil, "C", `Strictly valid until ${pad2(vd.getUTCDate())}-${MONTHS[vd.getUTCMonth()]}-${vd.getUTCFullYear()}`);
+    edit(R.validUntil, "C", `Strictly valid until ${pad2(vd.getUTCDate())}-${MONTHS[vd.getUTCMonth()]}-${String(vd.getUTCFullYear()).slice(-2)}`);   // DD-MMM-YY like the quote date
     // totals: only "Total Amount with VAT" (prices are entered including VAT)
     DELETE.add(R.totals[0]); DELETE.add(R.totals[1]);
     // installation, stainless note
@@ -283,7 +305,7 @@
           items.push(["note", f.slice(0, cut).trimEnd()]); items.push(["note", "    " + f.slice(cut).trim()]);
         } else items.push(["note", f]);
       }
-      segs.push({ cat, items });
+      segs.push({ cat, bar: p.bar || cat, items });
     }));
     // row heights of the template (after deletions) to plan the pages
     const tplRowH = new Map();
@@ -301,8 +323,8 @@
     let prevCat = null, pageStart = true;
     const withLead = (seg, atStart) => {
       const lead = [];
-      if (seg.cat !== prevCat) { if (prevCat !== null && !atStart) lead.push(["blank"]); lead.push(["banner", seg.cat]); }
-      else if (!atStart) lead.push(["blank"]);
+      if (prevCat !== null && !atStart) lead.push(["blank"]);
+      lead.push(["banner", seg.bar]);            // every product has its own pink bar
       return lead.concat(seg.items);
     };
     const hOf = items => items.reduce((a, it) => a + itemH(it), 0);
@@ -355,12 +377,17 @@
     const stockLines = p => {
       if (!p.noStock) return [];
       const L = [STOCK_TEXT];
-      if (p.noStockUntil) { const d = isoToDate(String(p.noStockUntil).slice(0, 10)); if (!isNaN(d) && d >= quoteDay) L.push("Arrival on or about", `${pad2(d.getUTCDate())}-${MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()}`); }
+      if (p.noStockUntil) { const d = isoToDate(String(p.noStockUntil).slice(0, 10)); if (!isNaN(d) && d >= quoteDay) L.push("Arrival on or about", `${pad2(d.getUTCDate())}-${MONTHS[d.getUTCMonth()]}-${String(d.getUTCFullYear()).slice(-2)}`); }
       return L;
     };
     const ex = p => ({ unit: p.price, normal: p.normal || p.price });   // unit prices INCLUDING VAT
     const newRows = [], merges = [], productRows = [], links = [];
-    const headingXml = r => (discount ? rowOf(sDisc, r) : "") || rowOf(s, r);
+    // second price column: "Promo Unit" when any product is at its website promo price, else "Discounted Unit"
+    const anyPromo = spec.products.some(p => p.isPromo);
+    const sstText = i => ((sst.match(/<si>[\s\S]*?<\/si>/g) || [])[i] || "").replace(/<[^>]+>/g, "");
+    const promoHead = rx => anyPromo ? rx.replace(/<c r="I(\d+)"([^>]*?)\st="s"([^>]*)>\s*<v>(\d+)<\/v>\s*<\/c>/, (m, n, a1, a2, v) =>
+      /^Discounted Unit/.test(sstText(+v)) ? `<c r="I${n}"${a1} t="inlineStr"${a2}><is><t>${sstText(+v).replace(/^Discounted/, "Promo")}</t></is></c>` : m) : rx;
+    const headingXml = r => (discount ? promoHead(rowOf(sDisc, r)) : "") || rowOf(s, r);
     let amountSum = 0;
     plan.forEach((item, k) => {
       const r = firstNew + k, kind = item[0];
@@ -418,7 +445,7 @@
     for (let rx of rows) {
       const r = +rx.match(/<row r="(\d+)"/)[1];
       if (DELETE.has(r)) continue;
-      if (discount && R.headings.includes(r)) rx = rowOf(sDisc, r) || rx;          // headings with Normal + Discounted price
+      if (discount && R.headings.includes(r)) rx = promoHead(rowOf(sDisc, r)) || rx;          // headings with Normal + Discounted price
       if (SHOW.has(r)) rx = rx.replace(' hidden="1"', "");
       if (r === R.transport) rx = rx.replace(new RegExp(`(<c r="[C-G]${R.transport}" s=")44(")`, "g"), (m, a, b) => a + "7" + b);   // drop the yellow reminder highlight
       if (CLEAR_B.has(r)) rx = setCellInRow(rx, `B${r}`, "", "");
@@ -503,6 +530,7 @@
     for (let a of anchors) {
       const r0 = +a.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/)[1];
       if (r0 + 1 >= R.example[0] && r0 + 1 <= R.example[R.example.length - 1]) continue;
+      if (!hasSigImage && r0 + 1 >= R.sigRows[0] && r0 + 1 <= R.sigRows[R.sigRows.length - 1]) continue;   // signature image
       a = a.replace(/<xdr:row>(\d+)<\/xdr:row>/g, (m, n) => { const r1 = +n + 1; let nr = r1; while (DELETE.has(nr)) nr++; return `<xdr:row>${newrow(nr) - 1}</xdr:row>`; });
       body.push(a);
     }
@@ -514,10 +542,12 @@
       const img = images[p.model];
       if (!img) { warnings.push(`No photo for ${p.model}`); return; }
       const i = idx + 1, aspect = img.width / img.height;
+      // size as before (fits beside the description, max 2.4M x 3.0M EMU), then every photo at two-thirds of that
       let h = Math.min(2400000, nBody * ROW_EMU - 90000), w = Math.floor(h * aspect);
       if (w > 3000000) { w = 3000000; h = Math.floor(w / aspect); }
+      const PHOTO_SCALE = 2 / 3; h = Math.floor(h * PHOTO_SCALE); w = Math.floor(w * PHOTO_SCALE);
       if (h <= 0) return;
-      const c0 = p.noStock ? 7 : 6, rw = p.noStock ? regionW - colEmu[6] : regionW;   // No Stock: label in F:G, photo in H..J
+      const c0 = 7, rw = regionW - colEmu[6];   // every photo centred on the same line (columns H..J), clear of the No Stock label
       if (w > rw - 20000) { w = rw - 20000; h = Math.floor(w / aspect); }
       const x = Math.floor((rw - w) / 2), [fc, fo] = xAnchor(x, c0), [tc, to] = xAnchor(x + w, c0);
       const rowsH = Math.floor((h + 20000) / ROW_EMU), rem = h + 20000 - rowsH * ROW_EMU;
@@ -691,6 +721,7 @@
   #dq-panel .prow .px{background:none;border:0;color:#999;font-size:18px;cursor:pointer;padding:0 2px;line-height:1}
   #dq-panel .prow .px:hover{color:#c8102e}
   #dq-addrow{margin-top:8px;padding:5px 10px;border:1px dashed #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px}
+  #dq-panel select.need{border-color:#c8102e;box-shadow:0 0 0 2px rgba(200,16,46,.25)}
   #dq-panel details{margin-top:12px}#dq-panel summary{cursor:pointer;color:#c8102e}
   #dq-panel .sg{order:4;flex:1 1 100%;border:1px solid #c8102e;border-radius:4px;background:#fff;max-height:280px;overflow:auto;display:none;box-shadow:0 4px 12px rgba(0,0,0,.12)}
   #dq-panel .sgi{display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:12px}
@@ -710,21 +741,26 @@
   const st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);
 
   const today = new Date();
-  const until = new Date(today); until.setDate(until.getDate() + 14);
+  const until = new Date(today); until.setDate(until.getDate() + 5);          // default validity: 5 days
+  if (until.getDay() === 6) until.setDate(until.getDate() - 1); else if (until.getDay() === 0) until.setDate(until.getDate() - 2);
   const panel = document.createElement("div"); panel.id = "dq-panel";
   panel.innerHTML = `
   <header><b>Quote Builder \u00b7 Dragon Electronics</b><button id="dq-close" title="Close">\u00d7</button></header>
   <div id="dq-body">
     <fieldset><legend>Customer</legend>
-      <label>To (name or company) *</label><input type="text" id="dq-to" placeholder="Mr. Jean DOE  or  ABC TRADING LTD">
-      <div class="chk"><input type="checkbox" id="dq-company"> Customer is a company <span class="hint">(adds the Attention line, name in CAPITALS)</span></div>
+      <label>To (name or company) *</label><input type="text" id="dq-to">
+      <label>Customer type</label>
+      <select id="dq-ctype"><option value="individual">Individual</option><option value="company">Company</option></select>
+      <div class="hint">Company adds the Attention line and writes the name in CAPITALS.</div>
       <div id="dq-cobox" style="display:none">
-        <label>Attention (Title First name SURNAME)</label><input type="text" id="dq-att" placeholder="Mr. Jean DOE, Purchasing Manager">
+        <label>Attention (Title First name SURNAME)</label><input type="text" id="dq-att">
+        <div class="row"><div><label>VAT No</label><input type="text" id="dq-vat"></div><div><label>BRN</label><input type="text" id="dq-brn"></div></div>
+        <div class="hint">Leave VAT or BRN empty if the company has none; that line is then left out.</div>
       </div>
-      <label>Address</label><input type="text" id="dq-addr1" placeholder="Street"><input type="text" id="dq-addr2" placeholder="Town" style="margin-top:4px">
+      <label>Address</label><input type="text" id="dq-addr1"><input type="text" id="dq-addr2" style="margin-top:4px">
       <div class="row"><div><label>Tel</label><input type="text" id="dq-tel"></div><div><label>Mobile</label><input type="text" id="dq-mob"></div></div>
-      <div class="chk"><input type="checkbox" id="dq-hasemail"> Add email</div>
-      <input type="text" id="dq-email" placeholder="name@example.com" style="display:none">
+      <label>Email</label><input type="text" id="dq-email">
+      <div class="hint">Leave Tel, Mobile or Email empty if the customer has none; that line is then left out.</div>
     </fieldset>
     <fieldset><legend>Products</legend>
       <div id="dq-cat"><div class="ct" id="dq-catstat"></div><button type="button" id="dq-catupd">Update product list</button></div>
@@ -756,11 +792,20 @@
       <div class="chk"><input type="checkbox" id="dq-transport"> Add the transport fee line</div>
       <label>Validity</label>
       <input type="date" id="dq-until" value="${isoLocal(until)}">
-      <div class="hint">Written as "Strictly valid until dd-mmm-yyyy". A Saturday or Sunday is moved back to the Friday before. Check public holidays yourself.</div>
+      <div class="hint">Written as "Strictly valid until dd-mmm-yy". A Saturday or Sunday is moved back to the Friday before. Check public holidays yourself.</div>
       <div class="chk"><input type="checkbox" id="dq-install" checked> Include the installation clause</div>
     </fieldset>
     <fieldset><legend>Quotation</legend>
       <div class="row"><div><label>Quotation No</label><input type="text" id="dq-no"></div><div><label>Date</label><input type="date" id="dq-date" value="${isoLocal(today)}"></div></div>
+      <label>Signed by</label><select id="dq-signer"></select>
+
+      <details id="dq-signedit"><summary>Edit the list of names</summary>
+        <div class="hint">One person per line: <b>Name | Job title</b>. The branch phone and email are added after the title. Only the person whose name matches the template's signature gets the signature image.</div>
+        <textarea id="dq-signlist" style="min-height:96px"></textarea>
+        <button type="button" id="dq-signsave" style="margin-top:6px;padding:4px 10px;border:1px solid #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px">Save list</button></details>
+      <label>Save quotes in folder</label>
+      <div style="display:flex;gap:8px;align-items:center"><span id="dq-dirstat" class="hint" style="flex:1;margin:0">Quotes go to your Downloads folder.</span>
+        <button type="button" id="dq-dirbtn" style="padding:4px 10px;border:1px solid #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap">Choose folder</button></div>
       <div class="hint">DP | customer initials | running number. Last number used: <input type="number" id="dq-counter" style="width:64px;padding:2px 4px"></div>
       <label>Quotation template</label>
       <div id="dq-tplstat" class="hint"></div>
@@ -769,6 +814,7 @@
     <button id="dq-go">Generate quotation</button>
     <div id="dq-log"></div>
     <details><summary>Quote history on this computer</summary><div id="dq-hist"></div></details>
+    <div id="dq-ver" style="margin-top:14px;padding-top:8px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#999">Quote Builder version 1.0 \u00b7 24-Nov-2026</div>
   </div>`;
   document.body.appendChild(panel);
   const $ = id => panel.querySelector("#" + id);
@@ -779,8 +825,7 @@
     $("dq-paytxt").style.display = $("dq-pay").value === "custom" ? "block" : "none";
     $("dq-payn").style.display = ["days", "down_delivery", "down_week"].includes($("dq-pay").value) ? "block" : "none";
     $("dq-delivn").style.display = $("dq-delivhint").style.display = $("dq-deliv").value === "days" ? "block" : "none";
-    $("dq-email").style.display = $("dq-hasemail").checked ? "block" : "none";
-    $("dq-cobox").style.display = $("dq-company").checked ? "block" : "none";
+    $("dq-cobox").style.display = $("dq-ctype").value === "company" ? "block" : "none";
   };
   $("dq-deliv").addEventListener("change", () => upd());
   $("dq-delivn").addEventListener("change", () => { const n = Math.round(+$("dq-delivn").value); $("dq-delivn").value = Math.min(30, Math.max(1, n || 30)); });
@@ -789,9 +834,8 @@
     upd();
   }));
   let noEdited = false, coEdited = false;
-  $("dq-company").addEventListener("change", () => { coEdited = true; upd(); });
-  $("dq-hasemail").addEventListener("change", upd);
-  $("dq-to").addEventListener("input", () => { if (!coEdited) { $("dq-company").checked = DQCore.looksLikeCompany($("dq-to").value); upd(); } });
+  $("dq-ctype").addEventListener("change", upd);
+
   $("dq-price").addEventListener("change", () => { if ($("dq-price").value === "promo") $("dq-disc").checked = true; });
   // product lines: model | qty | [ ] Discount -> price
   function addRow(model, qty) {
@@ -862,6 +906,22 @@
   }
   addRow(); addRow(); addRow();
   $("dq-addrow").addEventListener("click", () => addRow().querySelector(".pm").focus());
+  // ---- people who sign the quote (list kept in Chrome on this computer)
+  const DEFAULT_SIGNERS = [["Youvraj AUBEELUCK", "Shop Manager"], ["Farhaan ELLAHEE", "Sales Demonstrator"], ["Emillio MARUTHAMUTEE", "Sales Demonstrator"],
+    ["Jayslay SANTUCK", "Sales Demonstrator"], ["Ourmila BALIRAM", "Sales Demonstrator"]];
+  const getSigners = () => { const l = store.get("signers", null); return Array.isArray(l) && l.length ? l : DEFAULT_SIGNERS; };
+  function fillSigners() {
+    const list = getSigners(), cur = $("dq-signer").value;      // shared PC: no one is pre-selected, choose for each quote
+    $("dq-signer").innerHTML = `<option value="">\u2013 Choose who signs this quote \u2013</option>` + list.map(([n, t]) => `<option value="${h(n)}"${n === cur ? " selected" : ""}>${h(n)} \u2013 ${h(t)}</option>`).join("");
+    $("dq-signlist").value = list.map(([n, t]) => `${n} | ${t}`).join("\n");
+  }
+  fillSigners();
+  $("dq-signer").addEventListener("change", () => $("dq-signer").classList.remove("need"));
+  $("dq-signsave").addEventListener("click", () => {
+    const list = $("dq-signlist").value.split(/\n/).map(l => l.split("|").map(x => x.trim())).filter(x => x[0]).map(([n, t]) => [n, t || ""]);
+    if (!list.length) return;
+    store.set("signers", list); fillSigners(); $("dq-signedit").open = false;
+  });
   const suggestNo = () => { if (!noEdited) $("dq-no").value = `DP | ${DQCore.initials($("dq-to").value)} | ${pad2((+$("dq-counter").value || 0) + 1)}`; };
   $("dq-to").addEventListener("input", suggestNo); $("dq-counter").addEventListener("input", suggestNo);
   $("dq-no").addEventListener("input", () => { noEdited = true; });
@@ -873,6 +933,11 @@
   renderHist();
 
   const log = (msg, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = msg; $("dq-log").appendChild(d); d.scrollIntoView({ block: "nearest" }); return d; };
+
+  // ------------------------------------------------------------------ pink bar text per model (from Yousouf's sheet, 24 Nov 2026)
+  // Models not listed here use the website's category (or the POS category).
+  const PINK_BARS = {"100QNED85B8":"TV","50NU840B6LA":"TV","50NU850B6LA":"TV","55QNED70B6T":"TV","55QNED72B6T":"TV","55QNED85B6T":"TV","65QNED70B6T":"TV","65QNED72B6T":"TV","65QNED85B6T":"TV","75QNED70B6T":"TV","75QNED72B6T":"TV","75QNED85B6T":"TV","85QNED72B6T":"TV","86QNED85B6T":"TV","OLED55B66LA":"TV","OLED65B66LA":"TV","OLED65C66LA":"TV","OLED77C66LA":"TV","OLED83C66LA":"TV","GCB257SLWL":"Refrigerator","GCB411ELCM":"Refrigerator Only","GCB414ELCM":"Freezer Only","GCB459FMFW":"Refrigerator","GCJ257CQFW":"Refrigerator","GCX22FFQWS":"Refrigerator","GCX31FFCRB":"Refrigerator","GLB452PFBK":"Refrigerator","GML960PYFE":"Refrigerator","GNB262PFSF":"Refrigerator","GNB312PFGB":"Refrigerator","GNB389FLDM":"Refrigerator","GNH702HLHL":"Refrigerator","UA8F1CX":"Freezer Only","F0P2CYV2E":"Washing Machine","F2V5FYPYJ":"Washing Machine","F2V5GRPYJ":"Washer & Dryer","F2Y1HYP6J":"Washing Machine","F4V5RYP2T":"Washing Machine","F4X5EYP23":"Washing Machine","F4X5LYP26":"Washing Machine","F4Y7ERPYZ":"Washer & Dryer","F4Y7RRPYP":"Washer & Dryer","F4Y9LWP2ZB":"Washing Machine","RC90V9EV2W":"Dryer","RH10X56V2NP":"Dryer","RH90Y1MPTNP":"Dryer","T13V8TEHTX":"Washing Machine","T16V1NDHT2C":"Washing Machine","T18V1NDHT2":"Washing Machine","T23X2EHHST4":"Washing Machine","T65S1TDHT2":"Washing Machine","W4W8BVPKZHM":"Wash Tower","DFB512FP":"Dishwasher","DFC335HD":"Dishwasher","DFC435FP":"Dishwasher","MA3884VC":"Microwave","MA3885SPB":"Microwave","MA3885SPS":"Microwave","MH8265CIS":"Microwave","MH8265DIS":"Microwave","MJ3965ACS":"Microwave","MS3032JAS":"Microwave","MS4295CIS":"Microwave","MS4295DIS":"Microwave","MS5696HIT":"Microwave","AC12BK":"Air Conditioner","AC18BK":"Air Conditioner","AC24BK":"Air Conditioner","EZ12CYN":"Air Conditioner","EZ18CYN":"Air Conditioner","EZ24CYN":"Air Conditioner","S12EQ":"Air Conditioner","VM129CT":"Air Conditioner","VM189CT":"Air Conditioner","VM249CT":"Air Conditioner","BOUNCE":"XBOOM","POWER7000":"XBOOM","POWER9000":"XBOOM","RNC9":"XBOOM","S30A":"Sound Bar","S65TR":"Sound Bar","S75TR":"Sound Bar","S95AR":"Sound Bar","STAGE301":"XBOOM","STAGE501":"XBOOM","XL9T":"XBOOM","AGS72F/BK":"Built In Hob","AGS92S/BK":"Built In Hob","AMD54MXA":"Built In Microwave","AO235HX":"Built In Oven","AO435HB":"Built In Oven","AO458H1X":"Built In Oven","AO458HSUFB":"Built In Oven","AO458HSUFX":"Built In Oven","AOI5S8HM1XA":"Built In Oven","AOI78PT1SXA":"Built In Oven","AS1577CNE":"Built In Hob","DBC435TSL":"Built In Dishwasher","FTGHG751D/HA":"Built In Hob","H2IHD526A":"Built In Dishwasher","HQ2960SNE":"Built In Hob","HR602BA":"Built In Hob","IMPULSOBL/A/60":"Built In Hob","IMPULSOBL/A/83":"Built In Hob","MS5744IXA":"Built In Oven","PCN641T/IX/A":"Built In Hob","PCN751T/IX/A":"Built In Hob","PK951TGH":"Built In Hob","WS7D7632WB":"Built In Oven","WSED7612S":"Built In Oven","WSED7667M":"Built In Oven","AHBS6.7FLLX":"Kitchen Hood","AHBS9.7FLTIX":"Kitchen Hood","AHPN9.4FLMX1":"Kitchen Hood","CERTOSAIX/A/60":"Kitchen Hood","HHVP8.7FLTK":"Kitchen Hood","IXGL50":"Kitchen Hood","MORAN60":"Kitchen Hood","MORAN90":"Kitchen Hood","NORMAH6IX":"Kitchen Hood","SCARLETTXA90":"Kitchen Hood","SL161LPIX":"Kitchen Hood","SL191LPIX":"Kitchen Hood","SOFIAIX90":"Kitchen Hood","THUNDERBL/A/90":"Kitchen Hood","TT1460":"Kitchen Hood","TT1490":"Kitchen Hood","ZOEISLIX/A/90":"Kitchen Hood","HS68G8PHX/E/1":"Cooker","AR4010":"Rice Cooker","AR4080BASMATI":"Rice Cooker","CLASSICPINUP":"Toaster","CRUSTYFRY3000":"Deep Fryer","CV4000":"Steamer","DUODELUX":"Toaster","FUSIONPRO":"Hair Dryer","GENIUS":"Mixer","JUPITER1500M":"Hand Blender","KILIMANJARO":"Press Grill","LC5750":"Juicer","MERCURY2800":"Steam Iron","MOONSTONE":"Table Blender","NOVAESSENCE":"Steam Iron","PHOENIX":"Air Fryer","PPXTREME":"Hair Straightener","PULSAR600":"Hand Blender","PV2600GLIDE":"Steam Iron","RESIA":"Kettle","SC8460":"Hair Dryer","SUNRISEJOIE":"Toaster","SUNRISEVIE":"Kettle","VENEZIA":"Espresso Maker","BUTAN":"Ceiling Fan","FB3501T3":"Box Fan","FS4050T25":"Stand Fan","FW4027":"Wall Fan","NEPALNROBLE":"Ceiling Fan","A9KCORE":"Vacuum Cleaner","A9KULTRA":"Vacuum Cleaner","VC5420NHT":"Vacuum Cleaner","MD16GQSA1":"Dehumidifier","S3MFC":"Styler","A09":"Wall Bracket","S006":"Wall Bracket","ST113":"Wall Bracket","WM2615":"Wall Bracket"};
+  const pinkBar = d => PINK_BARS[String(d.model || "").toUpperCase().replace(/[\s\-()]/g, "")] || d.category;
 
   // ------------------------------------------------------------------ product lookup
   const norm = s => String(s || "").toUpperCase().replace(/[\s\-()]/g, "");
@@ -959,6 +1024,7 @@
       model, name: clean(doc.title.replace(/\s*-\s*Dragon Electronics\s*$/, "")) || clean(p.name), url, brand: clean(meta.brand) || null,
       category: crumbs.length >= 3 ? crumbs[1] : (topCat || "Products"),
       retail, promo: sale && retail && sale < retail ? sale : null, promoValid,
+      promoEnd: p.dateOnSaleTo && /^\d{4}-\d{2}-\d{2}/.test(p.dateOnSaleTo) ? p.dateOnSaleTo.slice(0, 10) : null,
       noStock: meta._no_stock === "yes" || p.stockStatus === "OUT_OF_STOCK",
       noStockUntil: meta._no_stock_until === "yes" && /^\d{4}-\d{2}-\d{2}/.test(meta._no_stock_until_date || "") ? meta._no_stock_until_date.slice(0, 10) : null,
       features, notes, dims, capacity,
@@ -971,8 +1037,8 @@
   const IDB = (() => {
     let dbp = null;
     const open = () => dbp || (dbp = new Promise((res, rej) => {
-      const r = indexedDB.open("dq-products", 2);
-      r.onupgradeneeded = () => { const db = r.result; for (const s of ["products", "photos", "pos"]) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: "id" }); };
+      const r = indexedDB.open("dq-products", 3);
+      r.onupgradeneeded = () => { const db = r.result; for (const s of ["products", "photos", "pos", "settings"]) if (!db.objectStoreNames.contains(s)) db.createObjectStore(s, { keyPath: "id" }); };
       r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
     }));
     const run = async (store, mode, fn) => {
@@ -1100,7 +1166,8 @@
   const POS_CAT = { "TV": "TV", "WASHING MACHINE": "Washer & Dryer", "DRYER": "Washer & Dryer", "WASHER DRYER TOWER": "Washer & Dryer", "REFRIGERATOR": "Refrigerator & Freezer",
     "FREEZER ONLY": "Refrigerator & Freezer", "MICROWAVE OVEN": "Microwave", "AIR CONDITIONER": "Air Conditioner", "DISHWASHER": "Dishwasher", "XBOOM 1-BODY": "Audio",
     "XBOOM PARTY SPEAKER": "Audio", "HOME THEATER SYSTEM": "Audio", "KITCHEN HOOD": "Kitchen Hood", "BUILT-IN APPLIANCE": "Built-In Appliance", "VACUUM CLEANER": "Vacuum Cleaner",
-    "ELECTRIC FAN": "Electric Fan", "DEHUMIDIFIER": "Dehumidifier", "COOKER": "Cooker", "STYLER": "Steam Clothing Care", "TV WALL BRACKET": "TV Wall Bracket" };
+    "ELECTRIC FAN": "Electric Fan", "DEHUMIDIFIER": "Dehumidifier", "COOKER": "Cooker", "STYLER": "Steam Clothing Care", "TV WALL BRACKET": "TV Wall Bracket",
+    "ELECTRIC FRYER": "Small Domestic Appliance", "HAIR DRYER": "Small Domestic Appliance", "RICE COOKER": "Small Domestic Appliance" };
   function posToProduct(r, asAt) {
     const brand = r.brand === "H ARISTON" ? "ARISTON" : r.brand === "DE" ? "DE Fan" : r.brand === "OTHER" ? "" : r.brand;
     const L = r.lines.slice();
@@ -1314,9 +1381,102 @@
     throw new Error("Choose your quotation template file first (Quotation section, bottom of the form).");
   }
 
+  // ------------------------------------------------------------------ save quotes into a folder on this computer (year / month subfolders)
+  const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const canPickFolder = typeof window.showDirectoryPicker === "function";
+  let quoteDir = null;
+  async function dirStatus() {
+    const st = $("dq-dirstat");
+    if (!canPickFolder) { st.textContent = "This browser cannot save into a folder; quotes go to Downloads."; $("dq-dirbtn").style.display = "none"; return; }
+    st.innerHTML = quoteDir ? `Saving to <b>${h(quoteDir.name)}</b> \u203a year \u203a month` : "Quotes go to your Downloads folder.";
+    $("dq-dirbtn").textContent = quoteDir ? "Change folder" : "Choose folder";
+  }
+  (async () => { try { const s = await IDB.get("settings", "quoteDir"); if (s && s.handle) quoteDir = s.handle; } catch (e) { /* none */ } dirStatus(); })();
+  $("dq-dirbtn").addEventListener("click", async () => {
+    try {
+      const d = await window.showDirectoryPicker({ id: "dq-quotes", mode: "readwrite", startIn: "documents" });
+      quoteDir = d; await IDB.put("settings", { id: "quoteDir", handle: d }); dirStatus();
+    } catch (e) { if (e && e.name !== "AbortError") log("\u2717 Folder not set: " + h(e.message || e), "err"); }
+  });
+  // must run straight after the click (Chrome only asks for permission during a click)
+  async function folderReady() {
+    const d = window.__dqTestDir || quoteDir;
+    if (!d) return null;
+    try {
+      const opts = { mode: "readwrite" };
+      if (d.queryPermission && (await d.queryPermission(opts)) === "granted") return d;
+      if (d.requestPermission && (await d.requestPermission(opts)) === "granted") return d;
+    } catch (e) { /* not allowed */ }
+    return null;
+  }
+  async function saveToFolder(d, isoDate, fname, bytes) {
+    const dt = isoDate ? new Date(isoDate + "T12:00:00") : new Date();
+    const y = await d.getDirectoryHandle(String(dt.getFullYear()), { create: true });
+    const m = await y.getDirectoryHandle(`${pad2(dt.getMonth() + 1)}-${MONTH_NAMES[dt.getMonth()]}`, { create: true });
+    let name = fname, k = 2;
+    const exists = async n => { try { await m.getFileHandle(n); return true; } catch (e) { return false; } };
+    while (await exists(name)) name = fname.replace(/\.xlsx$/, ` (${k++}).xlsx`);
+    const fh = await m.getFileHandle(name, { create: true });
+    const w = await fh.createWritable(); await w.write(new Blob([bytes])); await w.close();
+    return `${d.name}\\${dt.getFullYear()}\\${pad2(dt.getMonth() + 1)}-${MONTH_NAMES[dt.getMonth()]}\\${name}`;
+  }
+
+  // ---- "Quote Log.xlsx" in the quotes folder: one row per quote (kept outside Chrome)
+  const LOG_NAME = "Quote Log.xlsx", LOG_HEAD = ["Date", "Quotation No", "Customer", "Signed by", "Products", "Total incl. VAT (Rs)", "File"];
+  const xmlEsc = v => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const colL = i => String.fromCharCode(65 + i);
+  async function readLog(dir) {
+    let fh; try { fh = await dir.getFileHandle(LOG_NAME); } catch (e) { return []; }
+    const files = await DQCore.unzip(await (await fh.getFile()).arrayBuffer());
+    const xml = new TextDecoder().decode(files.get("xl/worksheets/sheet1.xml") || new Uint8Array());
+    const rows = [];
+    for (const m of xml.matchAll(/<row r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)) {
+      if (+m[1] === 1) continue;
+      const r = [];
+      for (const c of m[2].matchAll(/<c r="([A-Z]+)\d+"[^>]*?(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const t = (c[2] || "").match(/<t[^>]*>([\s\S]*?)<\/t>/), v = (c[2] || "").match(/<v>([^<]*)<\/v>/);
+        const val = t ? t[1].replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&") : v ? Number(v[1]) : "";
+        r[c[1].charCodeAt(0) - 65] = val;
+      }
+      rows.push(LOG_HEAD.map((_, i) => r[i] == null ? "" : r[i]));
+    }
+    return rows;
+  }
+  async function writeLog(dir, rows) {
+    const enc = new TextEncoder(), f = new Map();
+    const cell = (v, r, i, st) => typeof v === "number" ? `<c r="${colL(i)}${r}" s="${st || 2}"><v>${v}</v></c>` : `<c r="${colL(i)}${r}" t="inlineStr"${st ? ` s="${st}"` : ""}><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`;
+    const all = [LOG_HEAD, ...rows];
+    const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`
+      + `<cols><col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="16" customWidth="1"/><col min="3" max="3" width="32" customWidth="1"/><col min="4" max="4" width="24" customWidth="1"/><col min="5" max="5" width="50" customWidth="1"/><col min="6" max="6" width="20" customWidth="1"/><col min="7" max="7" width="48" customWidth="1"/></cols><sheetData>`
+      + all.map((r, k) => `<row r="${k + 1}">${r.map((v, i) => cell(v, k + 1, i, k === 0 ? 1 : 0)).join("")}</row>`).join("")
+      + `</sheetData><autoFilter ref="A1:G${all.length}"/></worksheet>`;
+    f.set("[Content_Types].xml", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`));
+    f.set("_rels/.rels", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`));
+    f.set("xl/workbook.xml", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Quotes" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Quotes!$A$1:$G$${all.length}</definedName></definedNames></workbook>`));
+    f.set("xl/_rels/workbook.xml.rels", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`));
+    f.set("xl/styles.xml", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFC8102E"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`));
+    f.set("xl/worksheets/sheet1.xml", enc.encode(sheet));
+    const fh = await dir.getFileHandle(LOG_NAME, { create: true });
+    const w = await fh.createWritable(); await w.write(new Blob([await DQCore.zip(f)])); await w.close();
+  }
+  // adds the quote (and any that could not be added before, e.g. while the log was open in Excel)
+  async function addToLog(dir, row) {
+    const pending = store.get("log_pending", []); pending.push(row);
+    try {
+      const rows = await readLog(dir);
+      await writeLog(dir, rows.concat(pending));
+      store.set("log_pending", []);
+      return null;
+    } catch (e) {
+      store.set("log_pending", pending);
+      return `${LOG_NAME} could not be updated (is it open in Excel? close it). This quote will be added to it with the next one.`;
+    }
+  }
+
   // ------------------------------------------------------------------ generate
   $("dq-go").onclick = async () => {
     const go = $("dq-go"); $("dq-log").innerHTML = "";
+    const folderP = folderReady();          // ask for the folder permission now, while the click counts
     const to = $("dq-to").value.trim();
     const items = [...$("dq-rows").querySelectorAll(".prow")].map(row => {
       const model = row.querySelector(".pm").value.trim().toUpperCase(), qtxt = row.querySelector(".pq").value.trim();
@@ -1335,6 +1495,7 @@
       return it;
     }).filter(Boolean);
     if (!to) return log("Enter the customer name.", "err");
+    if (!$("dq-signer").value) { $("dq-signer").classList.add("need"); $("dq-signer").focus(); return log("Choose who signs this quote (Signed by, in the Quotation section).", "err"); }
     if (!items.length) return log("Enter at least one model.", "err");
     const bad = items.filter(i => i.bad); if (bad.length) return log("Could not read: " + bad.map(b => h(b.bad)).join(", "), "err");
     go.disabled = true; go.textContent = "Working\u2026";
@@ -1349,7 +1510,7 @@
           const usePromo = own == null && $("dq-price").value === "promo" && d.promo;
           const price = own != null ? own : usePromo ? d.promo : d.retail;
           if (own != null && own >= d.retail) problems.push(`${d.model}: your price ${fmt(own)} is not below the website price ${fmt(d.retail)}`);
-          products.push({ noStock: !!d.noStock && !d.offWeb, noStockUntil: d.noStockUntil || null, category: d.category, brand: d.brand, model: d.model, name: d.name, qty: it.qty, price, normal: d.retail, url: d.url, features: d.features, capacity: d.capacity, dims: d.dims, notes: d.notes, _d: d, _promo: usePromo, _own: own != null });
+          products.push({ bar: pinkBar(d), isPromo: !!usePromo, noStock: !!d.noStock && !d.offWeb, noStockUntil: d.noStockUntil || null, category: d.category, brand: d.brand, model: d.model, name: d.name, qty: it.qty, price, normal: d.retail, url: d.url, features: d.features, capacity: d.capacity, dims: d.dims, notes: d.notes, _d: d, _promo: usePromo, _own: own != null });
           try { const im = await savedPhoto(d); if (im) images[d.model] = im; } catch (e) { problems.push(`${d.model}: photo could not be read`); }
           if (d.stale) problems.push(`${d.model}: not on the website any more \u2013 details and price taken from the saved product list (${DQCore.fmtDate(new Date(d.checked))}). Check them.`);
           line.className = "ok"; line.innerHTML = `\u2713 ${h(d.model)} \u2013 ${h(d.name)} \u2013 ${fmt(price)}${own != null ? ` <span class='warn'>(your price; website ${fmt(d.retail)})</span>` : ""}${d.noStock && !d.offWeb ? ` <span class='warn'>(No Stock on website${d.noStockUntil ? " \u2013 arrival on or about " + h(DQCore.fmtDate(new Date(d.noStockUntil + "T12:00:00"))) : ""})</span>` : ""}${d.stale ? " <span class='warn'>(saved copy \u2013 removed from website)</span>" : ""}${d.offWeb ? " <span class='warn'>(not on the website \u2013 POS price)</span>" : ""}`;
@@ -1368,11 +1529,20 @@
         const d = new Date($("dq-until").value + "T12:00:00");
         if (d.getDay() === 6) d.setDate(d.getDate() - 1); if (d.getDay() === 0) d.setDate(d.getDate() - 2);
         if (isoLocal(d) !== $("dq-until").value) log(`Validity moved to Friday ${isoLocal(d)} (the date fell on a weekend).`, "warn");
-        t.validity = { until: isoLocal(d) };
+        let untilIso = isoLocal(d);
+        // a quote must not promise a promo price after the promo ends
+        const promoEnds = products.filter(p => p._promo && p._d.promoEnd).map(p => [p._d.promoEnd, p.model]).sort();
+        if (promoEnds.length && promoEnds[0][0] < untilIso) {
+          untilIso = promoEnds[0][0];
+          problems.push(`Validity shortened to ${DQCore.fmtDate(new Date(untilIso + "T12:00:00"))}: the promo price of ${promoEnds.filter(x => x[0] === untilIso).map(x => x[1]).join(", ")} ends that day.`);
+        }
+        t.validity = { until: untilIso };
       }
       t.installation = $("dq-install").checked;
       const spec = {
-        customer: { to, company: $("dq-company").checked, address: [$("dq-addr1").value.trim(), $("dq-addr2").value.trim()].filter(Boolean), attention: $("dq-att").value.trim(), tel: $("dq-tel").value.trim(), mobile: $("dq-mob").value.trim(), email: $("dq-hasemail").checked ? $("dq-email").value.trim() : "" },
+        customer: { to, company: $("dq-ctype").value === "company", address: [$("dq-addr1").value.trim(), $("dq-addr2").value.trim()].filter(Boolean), attention: $("dq-att").value.trim(),
+          vat: $("dq-ctype").value === "company" ? $("dq-vat").value.trim() : "", brn: $("dq-ctype").value === "company" ? $("dq-brn").value.trim() : "", tel: $("dq-tel").value.trim(), mobile: $("dq-mob").value.trim(), email: $("dq-email").value.trim() },
+        signer: (() => { const n = $("dq-signer").value, e = getSigners().find(x => x[0] === n); return e ? { name: e[0], title: e[1] } : null; })(),
         quote_no: $("dq-no").value.trim(), date: $("dq-date").value, terms: t, layout: $("dq-disc").checked ? "discount" : "plain",
         warranties: [...new Set(products.map(DQCore.warrantyFor).filter(Boolean))], products
       };
@@ -1388,16 +1558,29 @@
       const res = await DQCore.buildQuote(template, spec, images);
       const fname = `Quotation_${spec.quote_no.replace(/\s*\|\s*/g, "-").replace(/[^\w\-]+/g, "_")}_${to.replace(/^(mr|mrs|ms|miss|dr)\.?\s+/i, "").replace(/[^\w]+/g, "_")}.xlsx`;
       const url = URL.createObjectURL(new Blob([res.bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-      const a = document.createElement("a"); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      let savedAs = null, folderNote = "";
+      const dir = await folderP;
+      if (dir) { try { savedAs = await saveToFolder(dir, spec.date, fname, res.bytes); } catch (e) { folderNote = "Could not save into your folder (" + (e.message || e) + "), so the file was downloaded instead."; } }
+      else if (quoteDir) folderNote = "Chrome did not allow saving into your folder this time, so the file was downloaded instead. Click Allow when Chrome asks.";
+      if (!savedAs) { const a = document.createElement("a"); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove(); }
       const counterMatch = spec.quote_no.match(/(\d+)\s*$/);
       if (counterMatch && +counterMatch[1] > (+$("dq-counter").value || 0)) { store.set("counter", +counterMatch[1]); $("dq-counter").value = +counterMatch[1]; }
-      const hist = store.get("history", []); hist.push({ date: spec.date, no: spec.quote_no, customer: to, total: res.total }); store.set("history", hist.slice(-200)); renderHist();
+      const hist = store.get("history", []); hist.push({ date: spec.date, no: spec.quote_no, customer: to, total: res.total, signedBy: spec.signer && spec.signer.name }); store.set("history", hist.slice(-200)); renderHist();
+      $("dq-signer").value = "";            // shared PC: the next quote asks again who signs it
       const promoRows = products.filter(p => !p._promo && !p._own && p._d.promo);
       let html = `<div class="hint">Prices incl. VAT</div><table><tr><th>Model</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr>${products.map(p => `<tr><td>${h(p.model)}</td><td class="n">${p.qty}</td><td class="n">${fmt(p.price)}</td><td class="n">${fmt(p.qty * p.price)}</td></tr>`).join("")}<tr><th colspan="3">Total incl. VAT</th><th class="n">${fmt(res.total)}</th></tr></table>`;
       if (promoRows.length) html += `<div class="warn" style="margin-top:6px">Promo prices available: ${promoRows.map(p => `${h(p.model)} ${fmt(p._d.promo)}${p._d.promoValid ? " until " + h(p._d.promoValid) : ""}`).join("; ")}.</div>`;
       const posSet = new Set(products.filter(p => p._d.descFrom === "pos").map(p => "No photo for " + p.model));
       [...problems, ...res.warnings.filter(w => !posSet.has(w))].forEach(w => { html += `<div class="warn">\u26a0 ${h(w)}</div>`; });
-      html += `<a class="dl" href="${url}" download="${h(fname)}">\u2b07 Download ${h(fname)}</a><div class="hint">For the PDF: open the file in Excel \u2192 File \u2192 Save as \u2192 PDF.</div>`;
+      if (savedAs) {
+        html += `<div class="ok" style="margin-top:6px">\u2713 Saved in <b>${h(savedAs)}</b></div>`;
+        const logRow = [DQCore.fmtDate(new Date((spec.date || isoLocal(new Date())) + "T12:00:00")), spec.quote_no, to, (spec.signer && spec.signer.name) || "",
+          products.map(p => `${p.model}${p.qty > 1 ? " x" + p.qty : ""}`).join(", "), Math.round(res.total * 100) / 100, savedAs];
+        const logErr = await addToLog(dir, logRow);
+        html += logErr ? `<div class="warn">\u26a0 ${h(logErr)}</div>` : `<div class="hint">Added to ${h(LOG_NAME)} in your quotes folder.</div>`;
+      }
+      if (folderNote) html += `<div class="warn">\u26a0 ${h(folderNote)}</div>`;
+      html += `<a class="dl" href="${url}" download="${h(fname)}">\u2b07 ${savedAs ? "Download a copy" : "Download"} ${h(fname)}</a><div class="hint">For the PDF: open the file in Excel \u2192 File \u2192 Save as \u2192 PDF.</div>`;
       log(html);
       noEdited = false; suggestNo();
     } catch (e) {
