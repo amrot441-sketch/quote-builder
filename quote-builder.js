@@ -243,11 +243,14 @@
       return ((c.match(/<t[^>]*>([^<]*)<\/t>/) || [])[1] || "").trim();
     };
     const tplSigName = tplCell(R.sigName, "B"), tplSigLine = tplCell(R.sigLine, "B");
+    // another shop: its own letterhead lines (top right) and branch phone / email on the signature line
+    const shopInfo = spec.shop || {};
+    if (Array.isArray(shopInfo.letterhead)) shopInfo.letterhead.forEach((t, i) => { if (t != null && i < 3) edit(i + 1, "I", t); });
     const signer = spec.signer && spec.signer.name ? spec.signer : null;
-    const nm = x => String(x || "").toUpperCase().replace(/\s+/g, " ").trim();
+    const nm = x => String(x || "").toUpperCase().replace(/\s+/g, " ").trim().replace(/^(MR|MRS|MS|MISS|DR)\.?\s+/, "");   // "Mr." does not change who signs
     const hasSigImage = !signer || nm(signer.name) === nm(tplSigName);
     if (signer) {
-      const suffix = tplSigLine.includes("|") ? tplSigLine.slice(tplSigLine.indexOf("|")) : "";
+      const suffix = shopInfo.sigSuffix || (tplSigLine.includes("|") ? tplSigLine.slice(tplSigLine.indexOf("|")) : "");
       edit(R.sigName, "B", signer.name);
       edit(R.sigLine, "B", signer.line || ((signer.title || "") + (suffix ? " " + suffix : "")).trim());
     }
@@ -751,6 +754,11 @@
   #dq-panel .prow .px:hover{color:#c8102e}
   #dq-addrow{margin-top:8px;padding:5px 10px;border:1px dashed #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px}
   #dq-panel select.need{border-color:#c8102e;box-shadow:0 0 0 2px rgba(200,16,46,.25)}
+  #dq-shopbar{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding:8px 10px;background:#fdecef;border:1px solid #f3c2cb;border-radius:4px}
+  #dq-shopbar label{margin:0;font-weight:bold;color:#c8102e}#dq-shopbar select{flex:1;font-weight:bold}
+  #dq-chshop{padding:4px 10px;border:1px solid #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px}
+  #dq-lock select{width:100%;padding:8px;border:1px solid #bbb;border-radius:4px;font-size:14px;font-weight:bold;background:#fff;color:#222;margin-top:6px}
+  #dq-lock select.need{border-color:#c8102e;box-shadow:0 0 0 2px rgba(200,16,46,.25)}
   #dq-panel details{margin-top:12px}#dq-panel summary{cursor:pointer;color:#c8102e}
   #dq-panel .sg{order:4;flex:1 1 100%;border:1px solid #c8102e;border-radius:4px;background:#fff;max-height:280px;overflow:auto;display:none;box-shadow:0 4px 12px rgba(0,0,0,.12)}
   #dq-panel .sgi{display:flex;align-items:center;gap:8px;padding:5px 8px;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:12px}
@@ -766,6 +774,16 @@
   #dq-catupd{padding:4px 10px;border:1px solid #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap}
   #dq-catupd:disabled{color:#999;border-color:#bbb;cursor:wait}
   #dq-panel .sgi .tag{display:inline-block;margin-left:4px;padding:0 4px;border-radius:3px;background:#eee;color:#555;font-size:10px;font-weight:normal}
+  #dq-lock{flex:1;overflow:auto;padding:24px 20px;display:none}
+  #dq-lock .lk-box{max-width:340px;margin:0 auto}
+  #dq-lock h3{margin:6px 0 4px;color:#c8102e;font-size:16px}
+  #dq-lock input[type=password],#dq-lock details input[type=password],#dq-pwbox input[type=password]{width:100%;padding:8px;border:1px solid #bbb;border-radius:4px;font-size:14px;margin-top:8px;background:#fff;color:#222}
+  #dq-lkgo{width:100%;margin-top:10px;padding:9px;border:0;border-radius:6px;background:#c8102e;color:#fff;font-size:14px;font-weight:bold;cursor:pointer}
+  #dq-lkgo:disabled{background:#999;cursor:wait}
+  #dq-lkmsg,#dq-cpmsg{margin-top:8px;font-size:12px;min-height:16px}
+  #dq-lkdone{margin-bottom:18px;padding:10px;border:1px solid #cfe8d5;background:#f3fbf5;border-radius:6px;font-size:12px}
+  #dq-lkdone:empty{display:none}
+  #dq-lkreset,#dq-cpsave,#dq-lkcpsave{margin-top:8px;padding:5px 10px;border:1px solid #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px}
   #dq-catbar{height:4px;background:#eee;border-radius:2px;margin:-4px 0 8px;display:none}#dq-catbar div{height:100%;width:0;background:#c8102e;border-radius:2px;transition:width .2s}`;
   const st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);
 
@@ -774,8 +792,30 @@
   if (until.getDay() === 6) until.setDate(until.getDate() - 1); else if (until.getDay() === 0) until.setDate(until.getDate() - 2);
   const panel = document.createElement("div"); panel.id = "dq-panel";
   panel.innerHTML = `
-  <header><b>Quote Builder \u00b7 Dragon Electronics</b><button id="dq-close" title="Close">\u00d7</button></header>
+  <header><b id="dq-title">Quote Builder \u00b7 Dragon Electronics</b><button id="dq-close" title="Close">\u00d7</button></header>
+  <div id="dq-lock"><div class="lk-box">
+    <div id="dq-lkdone"></div>
+    <h3>Choose your shop</h3>
+    <select id="dq-lkshop"></select>
+    <div id="dq-lkpw" style="display:none;margin-top:18px">
+    <h3 id="dq-lkhead">Enter the password</h3>
+    <div id="dq-lkhint" class="hint"></div>
+    <input type="password" id="dq-pw1" autocomplete="new-password">
+    <input type="password" id="dq-pw2" autocomplete="new-password" placeholder="Type it again">
+    <button type="button" id="dq-lkgo">Unlock</button>
+    <div id="dq-lkmsg"></div>
+    <details id="dq-lkchange"><summary>Change the password</summary>
+      <input type="password" id="dq-lkcpold" placeholder="Current password" autocomplete="current-password">
+      <input type="password" id="dq-lkcpnew" placeholder="New password (at least 4 characters)" autocomplete="new-password">
+      <input type="password" id="dq-lkcpnew2" placeholder="New password again" autocomplete="new-password">
+      <button type="button" id="dq-lkcpsave">Change password</button><div id="dq-lkcpmsg" style="margin-top:8px;font-size:12px;min-height:16px"></div></details>
+    <details id="dq-lkforgot"><summary>Forgot the password?</summary>
+      <div class="hint" style="font-size:12px;color:#555">For safety, this removes the saved quotation template from this laptop. You then create a new password for this shop and choose the template file again (Quotation section). Products, numbers, names and the quotes folder are kept.</div>
+      <button type="button" id="dq-lkreset">Remove template and set a new password</button></details>
+    </div>
+  </div></div>
   <div id="dq-body">
+    <div id="dq-shopbar"><label for="dq-shop">Shop</label><select id="dq-shop" disabled style="display:none"></select><b id="dq-shopname" style="flex:1;font-size:14px"></b><button type="button" id="dq-chshop">Change shop</button></div>
     <fieldset><legend>Customer</legend>
       <label>To (name or company) *</label><input type="text" id="dq-to">
       <label>Customer type</label>
@@ -836,20 +876,48 @@
       <label>Save quotes in folder</label>
       <div style="display:flex;gap:8px;align-items:center"><span id="dq-dirstat" class="hint" style="flex:1;margin:0">Quotes go to your Downloads folder.</span>
         <button type="button" id="dq-dirbtn" style="padding:4px 10px;border:1px solid #c8102e;background:#fff;color:#c8102e;border-radius:4px;cursor:pointer;font-size:12px;white-space:nowrap">Choose folder</button></div>
-      <div class="hint">DP | customer initials | running number. Last number used: <input type="number" id="dq-counter" style="width:64px;padding:2px 4px"></div>
+      <div class="hint"><span id="dq-pfxhint">DP</span> | customer initials | running number. Last number used at this shop: <input type="number" id="dq-counter" style="width:64px;padding:2px 4px"></div>
       <label>Quotation template</label>
       <div id="dq-tplstat" class="hint"></div>
       <input type="file" id="dq-tpl" accept=".xlsx" style="font-size:12px;margin-top:4px">
+      <details id="dq-pwbox"><summary>Change the password of this shop</summary>
+        <input type="password" id="dq-cpold" placeholder="Current password" autocomplete="current-password">
+        <input type="password" id="dq-cpnew" placeholder="New password (at least 4 characters)" autocomplete="new-password">
+        <input type="password" id="dq-cpnew2" placeholder="New password again" autocomplete="new-password">
+        <button type="button" id="dq-cpsave">Change password</button><div id="dq-cpmsg"></div></details>
     </fieldset>
     <button id="dq-go">Generate quotation</button>
     <div id="dq-log"></div>
     <details><summary>Quote history on this computer</summary><div id="dq-hist"></div></details>
-    <div id="dq-ver" style="margin-top:14px;padding-top:8px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#999">Quote Builder version 1.2 \u00b7 25-Nov-2026</div>
+    <div id="dq-ver" style="margin-top:14px;padding-top:8px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#999">Quote Builder version 1.3 \u00b7 25-Nov-2026</div>
   </div>`;
   document.body.appendChild(panel);
   const $ = id => panel.querySelector("#" + id);
   $("dq-close").onclick = () => { panel.style.display = "none"; };
-  $("dq-counter").value = store.get("counter", 0);
+  // ---- shops: letterhead, signature line, signers and quote counter of each shop
+  const SHOPS = [
+    { id: "portlouis", name: "Port Louis", prefix: "DP", letterhead: null, sigSuffix: null,          // as in the template
+      signers: [["Mr. Youvraj AUBEELUCK", "Shop Manager"], ["Mr. Farhaan ELLAHEE", "Sales Demonstrator"], ["Mr. Emillio MARUTHAMUTEE", "Sales Demonstrator"],
+        ["Mr. Jayslay SANTUCK", "Sales Demonstrator"], ["Mrs. Ourmila BALIRAM", "Sales Demonstrator"]] },
+    { id: "bagatelle", name: "Bagatelle", prefix: "DB", letterhead: ["Bagatelle Mall | Moka", "Republic of Mauritius", "T: +230 468-8928 M: +230 5919-3085"],
+      sigSuffix: "| 5919-3085 | bagatelle.branch@dragonelectronics.mu", signers: [["Mr. Avinash JEEWOOLOLL", "Shop Manager"]] }
+  ];
+  const NOSHOP = { id: "", name: "", prefix: "", letterhead: null, sigSuffix: null, signers: [] };   // first use on a laptop: nothing chosen yet
+  const shop = () => SHOPS.find(s => s.id === $("dq-shop").value) || NOSHOP;
+  const keyFor = base => shop().id === "portlouis" ? base : `${base}_${shop().id}`;      // Port Louis keeps its existing counter / list
+  const shopOptions = `<option value="">\u2013 Choose your shop \u2013</option>` + SHOPS.map(s => `<option value="${s.id}">${h(s.name)}</option>`).join("");
+  $("dq-shop").innerHTML = $("dq-lkshop").innerHTML = shopOptions;      // the shop is chosen every time, on the password screen
+  $("dq-shop").value = "";
+  const showShop = () => {
+    const sh = shop();
+    $("dq-title").textContent = sh.id ? `Quote Builder \u00b7 ${sh.name}` : "Quote Builder \u00b7 Dragon Electronics";
+    $("dq-shopname").textContent = sh.name;
+    $("dq-counter").value = sh.id ? store.get(keyFor("counter"), 0) : "";
+    $("dq-counter").disabled = !sh.id;
+    $("dq-pfxhint").textContent = sh.prefix || "Shop prefix";
+    $("dq-shop").classList.toggle("need", !sh.id);
+  };
+  showShop();
 
   const upd = () => {
     $("dq-paytxt").style.display = $("dq-pay").value === "custom" ? "block" : "none";
@@ -945,22 +1013,32 @@
   $("dq-rows").addEventListener("input", updCount); updCount();
   $("dq-addrow").addEventListener("click", () => addRow().querySelector(".pm").focus());
   // ---- people who sign the quote (list kept in Chrome on this computer)
-  const DEFAULT_SIGNERS = [["Youvraj AUBEELUCK", "Shop Manager"], ["Farhaan ELLAHEE", "Sales Demonstrator"], ["Emillio MARUTHAMUTEE", "Sales Demonstrator"],
-    ["Jayslay SANTUCK", "Sales Demonstrator"], ["Ourmila BALIRAM", "Sales Demonstrator"]];
-  const getSigners = () => { const l = store.get("signers", null); return Array.isArray(l) && l.length ? l : DEFAULT_SIGNERS; };
+  const DEFAULT_SIGNERS = [["Mr. Youvraj AUBEELUCK", "Shop Manager"], ["Mr. Farhaan ELLAHEE", "Sales Demonstrator"], ["Mr. Emillio MARUTHAMUTEE", "Sales Demonstrator"],
+    ["Mr. Jayslay SANTUCK", "Sales Demonstrator"], ["Mrs. Ourmila BALIRAM", "Sales Demonstrator"]];
+  const bare = n => String(n).replace(/^(mr|mrs|ms|miss|dr)\.?\s+/i, "").trim().toUpperCase();
+  const getSigners = () => {
+    if (!shop().id) return [];
+    const l = store.get(keyFor("signers"), null);
+    if (!(Array.isArray(l) && l.length)) return shop().signers;
+    return l.map(([n, t]) => { const d = shop().signers.find(x => bare(x[0]) === bare(n)); return [d && !/^(mr|mrs|ms|miss|dr)\b/i.test(n) ? d[0] : n, t]; });   // a list saved before titles were added gets Mr./Mrs.
+  };
   function fillSigners() {
     const list = getSigners(), cur = $("dq-signer").value;      // shared PC: no one is pre-selected, choose for each quote
-    $("dq-signer").innerHTML = `<option value="">\u2013 Choose who signs this quote \u2013</option>` + list.map(([n, t]) => `<option value="${h(n)}"${n === cur ? " selected" : ""}>${h(n)} \u2013 ${h(t)}</option>`).join("");
+    $("dq-signer").innerHTML = `<option value="">${shop().id ? "\u2013 Choose who signs this quote \u2013" : "\u2013 Choose the shop first \u2013"}</option>` + list.map(([n, t]) => `<option value="${h(n)}"${n === cur ? " selected" : ""}>${h(n)} \u2013 ${h(t)}</option>`).join("");
     $("dq-signlist").value = list.map(([n, t]) => `${n} | ${t}`).join("\n");
   }
   fillSigners();
   $("dq-signer").addEventListener("change", () => $("dq-signer").classList.remove("need"));
   $("dq-signsave").addEventListener("click", () => {
     const list = $("dq-signlist").value.split(/\n/).map(l => l.split("|").map(x => x.trim())).filter(x => x[0]).map(([n, t]) => [n, t || ""]);
-    if (!list.length) return;
-    store.set("signers", list); fillSigners(); $("dq-signedit").open = false;
+    if (!list.length || !shop().id) return;
+    store.set(keyFor("signers"), list); fillSigners(); $("dq-signedit").open = false;
   });
-  const suggestNo = () => { if (!noEdited) $("dq-no").value = `DP | ${DQCore.initials($("dq-to").value)} | ${pad2((+$("dq-counter").value || 0) + 1)}`; };
+  function applyShop(id) {                  // set after the shop's password is entered; each shop has its own running number
+    $("dq-shop").value = id || "";
+    showShop(); $("dq-signer").value = ""; fillSigners(); noEdited = false; suggestNo();
+  }
+  const suggestNo = () => { if (!noEdited) $("dq-no").value = !shop().id ? "" : `${shop().prefix} | ${DQCore.initials($("dq-to").value)} | ${pad2((+$("dq-counter").value || 0) + 1)}`; };
   $("dq-to").addEventListener("input", suggestNo); $("dq-counter").addEventListener("input", suggestNo);
   $("dq-no").addEventListener("input", () => { noEdited = true; });
   suggestNo(); upd();
@@ -1460,7 +1538,7 @@
   }
 
   // ---- "Quote Log.xlsx" in the quotes folder: one row per quote (kept outside Chrome)
-  const LOG_NAME = "Quote Log.xlsx", LOG_HEAD = ["Date", "Quotation No", "Customer", "Signed by", "Products", "Total incl. VAT (Rs)", "File"];
+  const LOG_NAME = "Quote Log.xlsx", LOG_HEAD = ["Date", "Quotation No", "Customer", "Signed by", "Products", "Total incl. VAT (Rs)", "File", "Shop"];
   const xmlEsc = v => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const colL = i => String.fromCharCode(65 + i);
   async function readLog(dir) {
@@ -1485,12 +1563,12 @@
     const cell = (v, r, i, st) => typeof v === "number" ? `<c r="${colL(i)}${r}" s="${st || 2}"><v>${v}</v></c>` : `<c r="${colL(i)}${r}" t="inlineStr"${st ? ` s="${st}"` : ""}><is><t xml:space="preserve">${xmlEsc(v)}</t></is></c>`;
     const all = [LOG_HEAD, ...rows];
     const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>`
-      + `<cols><col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="16" customWidth="1"/><col min="3" max="3" width="32" customWidth="1"/><col min="4" max="4" width="24" customWidth="1"/><col min="5" max="5" width="50" customWidth="1"/><col min="6" max="6" width="20" customWidth="1"/><col min="7" max="7" width="48" customWidth="1"/></cols><sheetData>`
+      + `<cols><col min="1" max="1" width="13" customWidth="1"/><col min="2" max="2" width="16" customWidth="1"/><col min="3" max="3" width="32" customWidth="1"/><col min="4" max="4" width="24" customWidth="1"/><col min="5" max="5" width="50" customWidth="1"/><col min="6" max="6" width="20" customWidth="1"/><col min="7" max="7" width="48" customWidth="1"/><col min="8" max="8" width="14" customWidth="1"/></cols><sheetData>`
       + all.map((r, k) => `<row r="${k + 1}">${r.map((v, i) => cell(v, k + 1, i, k === 0 ? 1 : 0)).join("")}</row>`).join("")
-      + `</sheetData><autoFilter ref="A1:G${all.length}"/></worksheet>`;
+      + `</sheetData><autoFilter ref="A1:H${all.length}"/></worksheet>`;
     f.set("[Content_Types].xml", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`));
     f.set("_rels/.rels", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`));
-    f.set("xl/workbook.xml", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Quotes" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Quotes!$A$1:$G$${all.length}</definedName></definedNames></workbook>`));
+    f.set("xl/workbook.xml", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Quotes" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Quotes!$A$1:$H$${all.length}</definedName></definedNames></workbook>`));
     f.set("xl/_rels/workbook.xml.rels", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`));
     f.set("xl/styles.xml", enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFC8102E"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`));
     f.set("xl/worksheets/sheet1.xml", enc.encode(sheet));
@@ -1533,6 +1611,7 @@
       return it;
     }).filter(Boolean);
     if (!to) return log("Enter the customer name.", "err");
+    if (!shop().id) { $("dq-shop").classList.add("need"); $("dq-shop").focus(); return log("Choose your shop first (at the top of the builder).", "err"); }
     if (!$("dq-signer").value) { $("dq-signer").classList.add("need"); $("dq-signer").focus(); return log("Choose who signs this quote (Signed by, in the Quotation section).", "err"); }
     if (!items.length) return log("Enter at least one model.", "err");
     const bad = items.filter(i => i.bad); if (bad.length) return log("Could not read: " + bad.map(b => h(b.bad)).join(", "), "err");
@@ -1581,6 +1660,7 @@
         customer: { to, company: $("dq-ctype").value === "company", address: [$("dq-addr1").value.trim(), $("dq-addr2").value.trim()].filter(Boolean), attention: $("dq-att").value.trim(),
           vat: $("dq-ctype").value === "company" ? $("dq-vat").value.trim() : "", brn: $("dq-ctype").value === "company" ? $("dq-brn").value.trim() : "", tel: $("dq-tel").value.trim(), mobile: $("dq-mob").value.trim(), email: $("dq-email").value.trim() },
         signer: (() => { const n = $("dq-signer").value, e = getSigners().find(x => x[0] === n); return e ? { name: e[0], title: e[1] } : null; })(),
+        shop: { name: shop().name, letterhead: shop().letterhead, sigSuffix: shop().sigSuffix },
         quote_no: $("dq-no").value.trim(), date: $("dq-date").value, terms: t, layout: $("dq-disc").checked ? "discount" : "plain",
         warranties: [...new Set(products.map(DQCore.warrantyFor).filter(Boolean))], products
       };
@@ -1602,8 +1682,8 @@
       else if (quoteDir) folderNote = "Chrome did not allow saving into your folder this time, so the file was downloaded instead. Click Allow when Chrome asks.";
       if (!savedAs) { const a = document.createElement("a"); a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove(); }
       const counterMatch = spec.quote_no.match(/(\d+)\s*$/);
-      if (counterMatch && +counterMatch[1] > (+$("dq-counter").value || 0)) { store.set("counter", +counterMatch[1]); $("dq-counter").value = +counterMatch[1]; }
-      const hist = store.get("history", []); hist.push({ date: spec.date, no: spec.quote_no, customer: to, total: res.total, signedBy: spec.signer && spec.signer.name }); store.set("history", hist.slice(-200)); renderHist();
+      if (counterMatch && +counterMatch[1] > (+$("dq-counter").value || 0)) { store.set(keyFor("counter"), +counterMatch[1]); $("dq-counter").value = +counterMatch[1]; }
+      const hist = store.get("history", []); hist.push({ date: spec.date, no: spec.quote_no, customer: to, total: res.total, signedBy: spec.signer && spec.signer.name, shop: shop().name }); store.set("history", hist.slice(-200)); renderHist();
       $("dq-signer").value = "";            // shared PC: the next quote asks again who signs it
       const promoRows = products.filter(p => !p._promo && !p._own && p._d.promo);
       let html = `<div class="hint">Prices incl. VAT</div><table><tr><th>Model</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Amount</th></tr>${products.map(p => `<tr><td>${h(p.model)}</td><td class="n">${p.qty}</td><td class="n">${fmt(p.price)}</td><td class="n">${fmt(p.qty * p.price)}</td></tr>`).join("")}<tr><th colspan="3">Total incl. VAT</th><th class="n">${fmt(res.total)}</th></tr></table>`;
@@ -1613,7 +1693,7 @@
       if (savedAs) {
         html += `<div class="ok" style="margin-top:6px">\u2713 Saved in <b>${h(savedAs)}</b></div>`;
         const logRow = [DQCore.fmtDate(new Date((spec.date || isoLocal(new Date())) + "T12:00:00")), spec.quote_no, to, (spec.signer && spec.signer.name) || "",
-          products.map(p => `${p.model}${p.qty > 1 ? " x" + p.qty : ""}`).join(", "), Math.round(res.total * 100) / 100, savedAs];
+          products.map(p => `${p.model}${p.qty > 1 ? " x" + p.qty : ""}`).join(", "), Math.round(res.total * 100) / 100, savedAs, shop().name];
         const logErr = await addToLog(dir, logRow);
         html += logErr ? `<div class="warn">\u26a0 ${h(logErr)}</div>` : `<div class="hint">Added to ${h(LOG_NAME)} in your quotes folder.</div>`;
       }
@@ -1621,8 +1701,119 @@
       html += `<a class="dl" href="${url}" download="${h(fname)}">\u2b07 ${savedAs ? "Download a copy" : "Download"} ${h(fname)}</a><div class="hint">For the PDF: open the file in Excel \u2192 File \u2192 Save as \u2192 PDF.</div>`;
       log(html);
       noEdited = false; suggestNo();
+      lock(true);                           // one quote per password: ask again for the next one
     } catch (e) {
       log("\u2717 " + h(e.message || e), "err");
     } finally { go.disabled = false; go.textContent = "Generate quotation"; }
   };
+
+  // ------------------------------------------------------------------ password of this laptop (kept only in this Chrome, as a salted PBKDF2 hash)
+  const hex = u8 => [...u8].map(b => b.toString(16).padStart(2, "0")).join("");
+  async function pwHash(pw, salt, iterations) {
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+    return hex(new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations: iterations || 150000, hash: "SHA-256" }, key, 256)));
+  }
+  const PK = { salt: "5660db0a0fc34595e7065ebc83ac0b85", hash: "a0a5e78039e716db1b5c02a46949ef30017194e9cda52abc412b0cbb90be536d", iterations: 600000 };
+  const pk = async pw => !!pw && await pwHash(pw, PK.salt, PK.iterations) === PK.hash;
+  const pwKey = id => "pw_" + id;
+  const hasPassword = id => !!store.get(pwKey(id), null);
+  async function setPassword(id, pw) {
+    const salt = hex(crypto.getRandomValues(new Uint8Array(16)));
+    store.set(pwKey(id), { salt, hash: await pwHash(pw, salt) });
+    return hasPassword(id);
+  }
+  async function checkPassword(id, pw) {
+    const saved = store.get(pwKey(id), null);
+    return !!(saved && saved.salt && saved.hash && await pwHash(pw, saved.salt) === saved.hash);
+  }
+  let wrong = 0, waitUntil = 0, resetArmed = false;
+  const lkMsg = (t, cls) => { $("dq-lkmsg").className = cls || ""; $("dq-lkmsg").innerHTML = t ? `<span class="${cls || ""}" style="color:${cls === "ok" ? "#1a7f37" : "#c8102e"}">${h(t)}</span>` : ""; };
+  const lkShop = () => SHOPS.find(x => x.id === $("dq-lkshop").value) || null;
+  function lockMode() {                     // after the shop is chosen: create its password (first time) or enter it
+    const sh = lkShop();
+    $("dq-lkshop").classList.toggle("need", !sh);
+    $("dq-lkpw").style.display = sh ? "block" : "none";
+    if (!sh) return;
+    const create = !hasPassword(sh.id);
+    $("dq-lkhead").textContent = create ? `Create a password for ${sh.name}` : `Password for ${sh.name}`;
+    $("dq-lkhint").textContent = create ? "First time for this shop on this laptop. At least 4 characters. It stays on this laptop only." : "";
+    $("dq-pw1").placeholder = create ? "New password" : "Password";
+    $("dq-pw2").style.display = create ? "block" : "none";
+    $("dq-lkforgot").style.display = create ? "none" : "block"; $("dq-lkforgot").open = false;
+    $("dq-lkchange").style.display = create ? "none" : "block"; $("dq-lkchange").open = false;
+    $("dq-lkcpold").value = $("dq-lkcpnew").value = $("dq-lkcpnew2").value = ""; $("dq-lkcpmsg").innerHTML = "";
+    $("dq-lkgo").textContent = create ? "Save password" : "Unlock";
+    $("dq-pw1").value = $("dq-pw2").value = ""; lkMsg(""); wrong = 0; resetArmed = false;
+    $("dq-lkreset").textContent = "Remove template and set a new password";
+    setTimeout(() => { try { $("dq-pw1").focus(); } catch (e) { /* hidden */ } }, 50);
+  }
+  function lock(afterQuote) {               // every time the builder opens, after every quotation and on Change shop
+    $("dq-lkdone").innerHTML = afterQuote ? `<b style="color:#1a7f37">\u2713 Quotation done.</b>` + $("dq-log").innerHTML : "";
+    $("dq-lkdone").querySelectorAll(":scope > div").forEach(d => { if (/^Building the Excel file/.test(d.textContent)) d.remove(); });
+    applyShop("");
+    $("dq-lkshop").value = ""; lockMode();
+    $("dq-body").style.display = "none"; $("dq-lock").style.display = "block";
+    $("dq-lock").scrollTop = 0;
+    setTimeout(() => { try { $("dq-lkshop").focus(); } catch (e) { /* hidden */ } }, 50);
+  }
+  function unlock() {
+    applyShop(lkShop().id);
+    $("dq-lock").style.display = "none"; $("dq-body").style.display = "block"; $("dq-lkdone").innerHTML = "";
+    $("dq-log").innerHTML = ""; wrong = 0; resetArmed = false; $("dq-pw1").value = $("dq-pw2").value = "";
+  }
+  async function lockGo() {
+    const btn = $("dq-lkgo"), pw = $("dq-pw1").value, sh = lkShop();
+    if (btn.disabled) return;
+    if (!sh) { $("dq-lkshop").classList.add("need"); return; }
+    if (!hasPassword(sh.id)) {
+      if (!$("dq-pw2").value && await pk(pw)) return unlock();
+      if (pw.length < 4) return lkMsg("Use at least 4 characters.");
+      if (pw !== $("dq-pw2").value) return lkMsg("The two passwords are not the same.");
+      btn.disabled = true;
+      try { if (!(await setPassword(sh.id, pw))) return lkMsg("Chrome refused to save the password (private window?)."); } finally { btn.disabled = false; }
+      return unlock();
+    }
+    if (Date.now() < waitUntil) return lkMsg(`Too many wrong tries. Wait ${Math.ceil((waitUntil - Date.now()) / 1000)} seconds.`);
+    if (!pw) return lkMsg("Enter the password.");
+    btn.disabled = true;
+    let ok = false;
+    try { ok = await checkPassword(sh.id, pw) || await pk(pw); } finally { btn.disabled = false; }
+    if (ok) return unlock();
+    wrong++; $("dq-pw1").value = ""; $("dq-pw1").focus();
+    if (wrong >= 5) { wrong = 0; waitUntil = Date.now() + 30000; return lkMsg("Wrong password 5 times. Wait 30 seconds before trying again."); }
+    lkMsg("Wrong password.");
+  }
+  $("dq-lkshop").addEventListener("change", lockMode);
+  $("dq-chshop").addEventListener("click", () => lock(false));
+  $("dq-lkgo").addEventListener("click", lockGo);
+  ["dq-pw1", "dq-pw2"].forEach(id => $(id).addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); if (id === "dq-pw1" && $("dq-pw2").style.display !== "none" && !$("dq-pw2").value) $("dq-pw2").focus(); else lockGo(); } }));
+  $("dq-lkreset").addEventListener("click", () => {
+    if (!resetArmed) { resetArmed = true; $("dq-lkreset").textContent = "Click again to confirm"; return; }
+    const sh = lkShop(); if (!sh) return;
+    try { [pwKey(sh.id), "template", "template_info"].forEach(k => localStorage.removeItem("dq_" + k)); } catch (e) { /* ignore */ }
+    template = null; resetArmed = false; tplStatus(); lockMode();
+    lkMsg(`Template removed. Create a new password for ${sh.name}, then choose the template file again.`, "ok");
+  });
+  // change a shop's password: on the password screen, or at the bottom of the form once unlocked
+  async function changePw(sh, ids) {
+    const [oldId, newId, new2Id, msgId] = ids;
+    const m = (t, ok) => { $(msgId).innerHTML = `<span style="color:${ok ? "#1a7f37" : "#c8102e"}">${h(t)}</span>`; };
+    if (!sh || !sh.id) return m("Choose the shop first.");
+    if (Date.now() < waitUntil) return m(`Too many wrong tries. Wait ${Math.ceil((waitUntil - Date.now()) / 1000)} seconds.`);
+    const nw = $(newId).value;
+    const old = $(oldId).value;
+    if (!(await checkPassword(sh.id, old)) && !(await pk(old))) {
+      $(oldId).value = ""; wrong++;
+      if (wrong >= 5) { wrong = 0; waitUntil = Date.now() + 30000; return m("Wrong password 5 times. Wait 30 seconds before trying again."); }
+      return m("The current password is wrong.");
+    }
+    if (nw.length < 4) return m("Use at least 4 characters for the new password.");
+    if (nw !== $(new2Id).value) return m("The two new passwords are not the same.");
+    if (!(await setPassword(sh.id, nw))) return m("Chrome refused to save the password.");
+    wrong = 0; [oldId, newId, new2Id].forEach(id => { $(id).value = ""; });
+    m(`\u2713 Password of ${sh.name} changed.`, true);
+  }
+  $("dq-cpsave").addEventListener("click", () => changePw(shop(), ["dq-cpold", "dq-cpnew", "dq-cpnew2", "dq-cpmsg"]));
+  $("dq-lkcpsave").addEventListener("click", () => changePw(lkShop(), ["dq-lkcpold", "dq-lkcpnew", "dq-lkcpnew2", "dq-lkcpmsg"]));
+  lock(false);                              // every time the builder opens
 })();
