@@ -167,6 +167,17 @@
       stylesXml = stylesXml.replace(/<\/fonts>/, fb + "</fonts>").replace(/<fonts count="\d+"/, `<fonts count="${fonts.length + 1}"`);
       return fonts.length;
     };
+    // a bold red version of a style's font (promo / discount prices)
+    const boldRedFont = base => {
+      const fid = fontIdOf(base);
+      const fonts = [...stylesXml.match(/<fonts[^>]*>([\s\S]*?)<\/fonts>/)[1].matchAll(/<font>[\s\S]*?<\/font>|<font\/>/g)].map(m => m[0]);
+      let f = (fonts[fid] || "<font></font>").replace(/<b\/>/g, "").replace(/<color [^>]*\/>/g, "");
+      f = f.replace("<font>", '<font><b/>').replace(/(<sz [^>]*\/>)/, '$1<color rgb="FFFF0000"/>');
+      if (!/FFFF0000/.test(f)) f = f.replace("<font><b/>", '<font><b/><color rgb="FFFF0000"/>');
+      const ex = fonts.indexOf(f); if (ex >= 0) return ex;
+      stylesXml = stylesXml.replace(/<\/fonts>/, f + "</fonts>").replace(/<fonts count="\d+"/, `<fonts count="${fonts.length + 1}"`);
+      return fonts.length;
+    };
     const sheets = sheetPaths(files), base = sheets["NO Disc"], disc = sheets["With Disc Column"];
     const SHEET = base.path, SHEET_RELS = SHEET.replace(/worksheets\/(sheet\d+\.xml)$/, "worksheets/_rels/$1.rels");
     let s = get(SHEET), sst = get("xl/sharedStrings.xml");
@@ -271,7 +282,10 @@
     DELETE.add(R.totals[0]); DELETE.add(R.totals[1]);
     // installation, stainless note
     if (t.installation === false) DELETE.add(R.install); else SHOW.add(R.install);
-    if (!t.stainless_note) DELETE.add(R.stainless);
+    // stainless steel note: only when the quote has an ARISTON (incl. HOTPOINT ARISTON) or TURBOAIR product
+    const hasSS = t.stainless_note != null ? !!t.stainless_note
+      : spec.products.some(p => /ariston|turbo\s?air/i.test(`${p.brand || ""} ${p.name || ""}`));
+    if (!hasSS) DELETE.add(R.stainless);
     // warranty lines
     const norm = x => (x || "").replace(/:/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
     const wanted = new Set((spec.warranties || []).map(norm));
@@ -290,6 +304,17 @@
     for (const w of wanted) if (!known.has(w)) warnings.push(`Warranty line not found in the template: ${w}`);
 
     // ---- product block plan (segments are kept on one page; the heading bar is repeated on every page with products)
+    // every photo gets the same visual size (same area, about 13 cm2), sized from its own shape:
+    // wide products come out shorter, tall ones narrower. Not linked to the length of the description.
+    const CM = 360000, PHOTO_AREA = 13 * CM * CM, PHOTO_MAX_H = 5.0 * CM, PHOTO_MAX_W = 5.6 * CM, ROW_EMU_P = Math.floor(14.4 * 12700);
+    const PHOTO_GAP_ROWS = 1;      // one empty line between the prices and the top of the photo
+    const photoBox = img => {
+      const aspect = img.width / img.height;
+      let w = Math.sqrt(PHOTO_AREA * aspect), h = w / aspect;
+      if (h > PHOTO_MAX_H) { h = PHOTO_MAX_H; w = h * aspect; }
+      if (w > PHOTO_MAX_W) { w = PHOTO_MAX_W; h = w / aspect; }
+      return { w: Math.floor(w), h: Math.floor(h), aspect };
+    };
     // one segment per product (category bars and gaps are added while placing them)
     const segs = [], cats = [];
     for (const p of spec.products) if (!cats.includes(p.category)) cats.push(p.category);
@@ -305,6 +330,8 @@
           items.push(["note", f.slice(0, cut).trimEnd()]); items.push(["note", "    " + f.slice(cut).trim()]);
         } else items.push(["note", f]);
       }
+      // a short description gets empty lines so the photo never runs into the next product
+      if (images[p.model]) { const need = PHOTO_GAP_ROWS + Math.ceil((photoBox(images[p.model]).h + 20000) / ROW_EMU_P); while (items.length - 1 < need) items.push(["pad"]); }
       segs.push({ cat, bar: p.bar || cat, items });
     }));
     // row heights of the template (after deletions) to plan the pages
@@ -329,12 +356,15 @@
     };
     const hOf = items => items.reduce((a, it) => a + itemH(it), 0);
     const queue = segs.slice();
+    // the total (blank row + "Total Amount with VAT") must sit on the page of the last product
+    let TOT = 0; for (let r = R.blankBeforeTotals; r <= R.totals[2]; r++) TOT += tH(r);
+    const need = items => hOf(items) + (queue.length === 1 ? TOT : 0);
     while (queue.length) {
       let idx = 0, items = withLead(queue[0], pageStart);
-      if (used + hOf(items) > CAP) {
-        const j = queue.findIndex((sg, k) => k > 0 && used + hOf(withLead(sg, pageStart)) <= CAP);
+      if (used + need(items) > CAP) {
+        const j = queue.length > 1 ? queue.findIndex((sg, k) => k > 0 && used + hOf(withLead(sg, pageStart)) <= CAP) : -1;
         if (j > 0) { idx = j; items = withLead(queue[j], pageStart); }
-        else if (hOf(withLead(queue[0], true)) <= CAP - TITLE - HEAD) {
+        else if (need(withLead(queue[0], true)) <= CAP - TITLE - HEAD) {
           forced.push(plan.length);
           R.headings.forEach(r => plan.push(["heading", r]));
           used = TITLE + HEAD; pageStart = true;
@@ -369,6 +399,7 @@
     ST.desc = deriveStyle(20, { horizontal: "left" });
     ST.qty = deriveStyle(25, { horizontal: "center" });
     ST.money = deriveStyle(45, { numFmtId: 4, horizontal: "center" });
+    ST.moneyRed = deriveStyle(ST.money, { fontId: boldRedFont(ST.money) });     // promo / discount price and its amount
     // "No Stock" label: yellow background, bold black, between the features and the photo
     ST.stock = deriveStyle(7, { fillId: solidFill("FFFFFF00"), fontId: boldFont(7), horizontal: "center" });
     const STOCK_TEXT = spec.no_stock_text || "NO STOCK";
@@ -400,11 +431,12 @@
         newRows.push(`<row r="${r}" s="2" customFormat="1" ht="18" spans="2:13">${cells}</row>`); merges.push(`B${r}:J${r}`);
       } else if (kind === "product") {
         const p = item[1], qty = p.qty || 1, e = ex(p), amount = qty * e.unit; amountSum += amount;
+        const red = !!(p.isPromo || p.isDisc || (p.normal && e.unit < e.normal - 0.001));   // promo or discount price -> bold red
         let cells;
         if (discount) cells = cell(`B${r}`, ST.model, { text: p.model }) + cell(`C${r}`, ST.desc, { text: p.name }) + cell(`D${r}`, 21) + cell(`E${r}`, 22) + cell(`F${r}`, 22)
-          + cell(`G${r}`, ST.qty, { num: qty }) + cell(`H${r}`, ST.money, { num: e.normal }) + cell(`I${r}`, ST.money, { num: e.unit }) + cell(`J${r}`, ST.money, { num: amount, formula: `I${r}*G${r}` }) + cell(`L${r}`, ST.discProdL);
+          + cell(`G${r}`, ST.qty, { num: qty }) + cell(`H${r}`, ST.money, { num: e.normal }) + cell(`I${r}`, red ? ST.moneyRed : ST.money, { num: e.unit }) + cell(`J${r}`, red ? ST.moneyRed : ST.money, { num: amount, formula: `I${r}*G${r}` }) + cell(`L${r}`, ST.discProdL);
         else cells = cell(`B${r}`, ST.model, { text: p.model }) + cell(`C${r}`, ST.desc, { text: p.name }) + cell(`D${r}`, 21) + cell(`E${r}`, 22) + cell(`F${r}`, 23) + cell(`G${r}`, 24)
-          + cell(`H${r}`, ST.qty, { num: qty }) + cell(`I${r}`, ST.money, { num: e.unit }) + cell(`J${r}`, ST.money, { num: amount, formula: `H${r}*I${r}` }) + cell(`L${r}`, 57);
+          + cell(`H${r}`, ST.qty, { num: qty }) + cell(`I${r}`, red ? ST.moneyRed : ST.money, { num: e.unit }) + cell(`J${r}`, red ? ST.moneyRed : ST.money, { num: amount, formula: `H${r}*I${r}` }) + cell(`L${r}`, 57);
         newRows.push(`<row r="${r}" s="${discount ? 4 : 3}" customFormat="1" spans="2:12">${cells}</row>`);
         stockPending = stockLines(p);
         const nBody = (p.features || []).length + (p.capacity ? 1 : 0) + (p.dims || []).length;
@@ -422,7 +454,7 @@
         }
         const tailCells = discount ? cell(`E${r}`, 22) + cell(`F${r}`, 22) + cell(`G${r}`, 25) + cell(`H${r}`, ST.discLine) + cell(`I${r}`, ST.discLine) + cell(`J${r}`, ST.discLine) + cell(`L${r}`, 60)
           : cell(`E${r}`, 22) + cell(`F${r}`, 31) + cell(`G${r}`, 32) + cell(`H${r}`, 28) + cell(`I${r}`, 28) + cell(`J${r}`, 28) + cell(`L${r}`, 57);
-        let cells = kind === "blank" ? cell(`B${r}`, 29) + cell(`C${r}`, 7) + cell(`D${r}`, 7) + tailCells
+        let cells = (kind === "blank" || kind === "pad") ? cell(`B${r}`, 29) + cell(`C${r}`, 7) + cell(`D${r}`, 7) + tailCells
           : cell(`B${r}`, 29) + cell(`C${r}`, cStyle, cOpt) + cell(`D${r}`, dStyle, dOpt) + tailCells;
         if (stockPending.length && kind !== "blank") {      // lines under a No Stock product: label in F:G ("NO STOCK", "until \u2026")
           cells = cells.replace(new RegExp(`<c r="F${r}"[^>]*?(?:\\/>|>[\\s\\S]*?<\\/c>)`), cell(`F${r}`, ST.stock, { text: stockPending.shift() }))
@@ -542,10 +574,7 @@
       const img = images[p.model];
       if (!img) { warnings.push(`No photo for ${p.model}`); return; }
       const i = idx + 1, aspect = img.width / img.height;
-      // size as before (fits beside the description, max 2.4M x 3.0M EMU), then every photo at two-thirds of that
-      let h = Math.min(2400000, nBody * ROW_EMU - 90000), w = Math.floor(h * aspect);
-      if (w > 3000000) { w = 3000000; h = Math.floor(w / aspect); }
-      const PHOTO_SCALE = 2 / 3; h = Math.floor(h * PHOTO_SCALE); w = Math.floor(w * PHOTO_SCALE);
+      let { w, h } = photoBox(img);      // same box for every product
       if (h <= 0) return;
       const c0 = 7, rw = regionW - colEmu[6];   // every photo centred on the same line (columns H..J), clear of the No Stock label
       if (w > rw - 20000) { w = rw - 20000; h = Math.floor(w / aspect); }
@@ -554,8 +583,8 @@
       const name = `quote_photo_${pad2(i)}.jpeg`, rid = `rIdQ${i}`;
       files.set(`xl/media/${name}`, img.bytes);
       rels = rels.replace("</Relationships>", `<Relationship Id="${rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${name}"/></Relationships>`);
-      body.push(`<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${fc}</xdr:col><xdr:colOff>${fo}</xdr:colOff><xdr:row>${prow}</xdr:row><xdr:rowOff>20000</xdr:rowOff></xdr:from>`
-        + `<xdr:to><xdr:col>${tc}</xdr:col><xdr:colOff>${to}</xdr:colOff><xdr:row>${prow + rowsH}</xdr:row><xdr:rowOff>${rem}</xdr:rowOff></xdr:to>`
+      body.push(`<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${fc}</xdr:col><xdr:colOff>${fo}</xdr:colOff><xdr:row>${prow + PHOTO_GAP_ROWS}</xdr:row><xdr:rowOff>20000</xdr:rowOff></xdr:from>`
+        + `<xdr:to><xdr:col>${tc}</xdr:col><xdr:colOff>${to}</xdr:colOff><xdr:row>${prow + PHOTO_GAP_ROWS + rowsH}</xdr:row><xdr:rowOff>${rem}</xdr:rowOff></xdr:to>`
         + `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${300 + i}" name="Photo ${esc(p.model)}"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>`
         + `<xdr:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>`
         + `<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${w}" cy="${h}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>`);
@@ -815,7 +844,7 @@
     <button id="dq-go">Generate quotation</button>
     <div id="dq-log"></div>
     <details><summary>Quote history on this computer</summary><div id="dq-hist"></div></details>
-    <div id="dq-ver" style="margin-top:14px;padding-top:8px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#999">Quote Builder version 1.1 \u00b7 24-Nov-2026</div>
+    <div id="dq-ver" style="margin-top:14px;padding-top:8px;border-top:1px solid #eee;text-align:center;font-size:11px;color:#999">Quote Builder version 1.2 \u00b7 25-Nov-2026</div>
   </div>`;
   document.body.appendChild(panel);
   const $ = id => panel.querySelector("#" + id);
@@ -1519,7 +1548,7 @@
           const usePromo = own == null && $("dq-price").value === "promo" && d.promo;
           const price = own != null ? own : usePromo ? d.promo : d.retail;
           if (own != null && own >= d.retail) problems.push(`${d.model}: your price ${fmt(own)} is not below the website price ${fmt(d.retail)}`);
-          products.push({ bar: pinkBar(d), isPromo: !!usePromo, noStock: !!d.noStock && !d.offWeb, noStockUntil: d.noStockUntil || null, category: d.category, brand: d.brand, model: d.model, name: d.name, qty: it.qty, price, normal: d.retail, url: d.url, features: d.features, capacity: d.capacity, dims: d.dims, notes: d.notes, _d: d, _promo: usePromo, _own: own != null });
+          products.push({ bar: pinkBar(d), isPromo: !!usePromo, isDisc: own != null, noStock: !!d.noStock && !d.offWeb, noStockUntil: d.noStockUntil || null, category: d.category, brand: d.brand, model: d.model, name: d.name, qty: it.qty, price, normal: d.retail, url: d.url, features: d.features, capacity: d.capacity, dims: d.dims, notes: d.notes, _d: d, _promo: usePromo, _own: own != null });
           try { const im = await savedPhoto(d); if (im) images[d.model] = im; } catch (e) { problems.push(`${d.model}: photo could not be read`); }
           if (d.stale) problems.push(`${d.model}: not on the website any more \u2013 details and price taken from the saved product list (${DQCore.fmtDate(new Date(d.checked))}). Check them.`);
           line.className = "ok"; line.innerHTML = `\u2713 ${h(d.model)} \u2013 ${h(d.name)} \u2013 ${fmt(price)}${own != null ? ` <span class='warn'>(your price; website ${fmt(d.retail)})</span>` : ""}${d.noStock && !d.offWeb ? ` <span class='warn'>(No Stock on website${d.noStockUntil ? " \u2013 arrival on or about " + h(DQCore.fmtDate(new Date(d.noStockUntil + "T12:00:00"))) : ""})</span>` : ""}${d.stale ? " <span class='warn'>(saved copy \u2013 removed from website)</span>" : ""}${d.offWeb ? " <span class='warn'>(not on the website \u2013 POS price)</span>" : ""}`;
